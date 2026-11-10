@@ -21,6 +21,12 @@ function NavItems() {
       <NavLink to="/admin/incidents" className={itemCls}>
         <Icon name="list" className="h-[18px] w-[18px]" /> Incidents
       </NavLink>
+      <NavLink to="/admin/teams" className={itemCls}>
+        <Icon name="users" className="h-[18px] w-[18px]" /> Response Teams
+      </NavLink>
+      <NavLink to="/admin/map" className={itemCls}>
+        <Icon name="map" className="h-[18px] w-[18px]" /> Live Map
+      </NavLink>
       <a href="/report" target="_blank" rel="noreferrer" className={itemCls({ isActive: false })}>
         <Icon name="plus" className="h-[18px] w-[18px]" /> New report
         <span className="sr-only">(opens in a new tab)</span>

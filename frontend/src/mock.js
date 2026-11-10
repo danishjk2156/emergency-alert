@@ -6,7 +6,7 @@
 import { FALLBACK_CATEGORIES, SEVERITIES, STATUSES } from './constants';
 import { computeSeverity } from './severity';
 
-const KEY = 'resqnet_mock_v5';
+const KEY = 'resqnet_mock_v7';
 const YEAR = new Date().getFullYear();
 
 const RATE_LIMIT = { max: 3, windowMs: 10 * 60 * 1000 }; // 3 reports / 10 min / device
@@ -132,6 +132,19 @@ const SEED_USERS = [
   { id: 2, name: 'Priya Raman', email: 'priya@example.com', password: 'priya1234', role: 'user', phone: '9840011223' },
 ];
 
+export const SEED_TEAMS = [
+  { id: 1, code: 'FIRE-01', name: 'Guindy Fire Station Tender 1', category: 'FIRE', location_label: 'Guindy Industrial Estate', latitude: 13.0067, longitude: 80.2206, status: 'busy', assigned_incident_id: 8 },
+  { id: 2, code: 'FIRE-02', name: 'T. Nagar Fire Rescue Squad', category: 'FIRE', location_label: 'T. Nagar South Usman Rd', latitude: 13.0418, longitude: 80.2341, status: 'available', assigned_incident_id: null },
+  { id: 3, code: 'MED-01', name: 'Adyar 108 Emergency Ambulance', category: 'MEDICAL', location_label: 'Adyar Bus Depot', latitude: 13.0012, longitude: 80.2565, status: 'available', assigned_incident_id: null },
+  { id: 4, code: 'MED-02', name: 'Anna Nagar ALS Pediatric Unit', category: 'MEDICAL', location_label: 'Anna Nagar Roundtana', latitude: 13.085, longitude: 80.2101, status: 'busy', assigned_incident_id: 11 },
+  { id: 5, code: 'RESCUE-01', name: 'Velachery Disaster Response Boat', category: 'FLOOD', location_label: 'Velachery Bypass Rd', latitude: 12.9815, longitude: 80.218, status: 'available', assigned_incident_id: null },
+  { id: 6, code: 'RESCUE-02', name: 'Tambaram Heavy Structural Rescue', category: 'COLLAPSE', location_label: 'Tambaram Station', latitude: 12.9249, longitude: 80.1, status: 'available', assigned_incident_id: null },
+  { id: 7, code: 'POLICE-01', name: 'Mylapore Highway Patrol Unit', category: 'ROAD', location_label: 'Mylapore Luz Corner', latitude: 13.0339, longitude: 80.2619, status: 'available', assigned_incident_id: null },
+  { id: 8, code: 'POLICE-02', name: 'OMR Expressway Quick Response', category: 'ROAD', location_label: 'Sholinganallur Junction', latitude: 12.901, longitude: 80.2279, status: 'available', assigned_incident_id: null },
+  { id: 9, code: 'FIRE-03', name: 'Chengalpattu Hazmat Engine', category: 'OTHER', location_label: 'GST Road Fire Station', latitude: 12.6921, longitude: 79.9707, status: 'available', assigned_incident_id: null },
+  { id: 10, code: 'MED-03', name: 'Kodambakkam Trauma Care Van', category: 'MEDICAL', location_label: 'Arcot Road Hospital', latitude: 13.0521, longitude: 80.2255, status: 'available', assigned_incident_id: null },
+];
+
 // [code, title, description, location, people, status, minutesAgo, reporterId|null, contact, device, gps?, verification?]
 const SEED = [
   ['MEDICAL', 'Fever and dizziness', 'Elderly man with high fever since morning, feeling dizzy.', 'Adyar, Chennai', 1, 'Resolved', 160, 2, [], 'dev-priya', [13.0015, 80.2561, 25], 'Verified'],
@@ -192,9 +205,21 @@ function makeIncident(id, fields, nowMs) {
 
 function seed() {
   const now = Date.now();
-  const state = { nextId: 1, nextUserId: SEED_USERS.length + 1, users: SEED_USERS.map((u) => ({ ...u })), tokens: {}, incidents: [], devices: {}, hits: {}, rateLimited: [] };
+  const state = {
+    nextId: 1,
+    nextUserId: SEED_USERS.length + 1,
+    nextTeamId: SEED_TEAMS.length + 1,
+    users: SEED_USERS.map((u) => ({ ...u })),
+    teams: SEED_TEAMS.map((t) => ({ ...t })),
+    tokens: {},
+    incidents: [],
+    devices: {},
+    hits: {},
+    rateLimited: [],
+  };
   for (const [code, title, description, location, people, status, mins, reporterId, contact, device, gps, verif] of SEED) {
     const reporter = state.users.find((u) => u.id === reporterId) || null;
+    const geoFallback = geocode(location);
     const inc = makeIncident(
       state.nextId++,
       {
@@ -208,9 +233,9 @@ function seed() {
         contact_name: contact[0] || reporter?.name,
         contact_phone: contact[1] || reporter?.phone,
         contact_email: contact[2] || reporter?.email,
-        latitude: gps?.[0],
-        longitude: gps?.[1],
-        location_accuracy_m: gps?.[2],
+        latitude: gps?.[0] ?? geoFallback?.latitude ?? 13.0418,
+        longitude: gps?.[1] ?? geoFallback?.longitude ?? 80.2341,
+        location_accuracy_m: gps?.[2] ?? 25,
         created_ms: now - mins * 60000,
       },
       now,
@@ -231,6 +256,19 @@ function seed() {
     inc.updated_at = inc.history[inc.history.length - 1].changed_at;
     inc.resolved_at = status === 'Resolved' ? inc.updated_at : null;
     if (verif) inc.verification_override = verif;
+
+    // Link assigned teams
+    if (inc.id === 8) {
+      inc.assigned_team_id = 1;
+      inc.assigned_at = inc.updated_at;
+    } else if (inc.id === 11) {
+      inc.assigned_team_id = 4;
+      inc.assigned_at = inc.updated_at;
+    } else {
+      inc.assigned_team_id = null;
+      inc.assigned_at = null;
+    }
+
     placeInCluster(state, inc);
     state.incidents.push(inc);
   }
@@ -341,6 +379,23 @@ function view(state, inc, nowMs = Date.now(), { forPublic = false } = {}) {
   const sorted = [...members].sort((a, b) => t(a.created_at) - t(b.created_at));
   const rank = sorted.findIndex((m) => m.id === inc.id) + 1;
 
+  // Priority queue calculation (Prompt F1 & F2)
+  const minsAgo = Math.max(0, Math.round((nowMs - t(inc.created_at)) / 60000));
+  const sevScore = inc.severity === 'Critical' ? 40 : inc.severity === 'High' ? 30 : inc.severity === 'Medium' ? 20 : 10;
+  const peopleScore = Math.min(30, (inc.people_affected || 0) * 3);
+  const timeScore = Math.min(20, Math.round(minsAgo / 5));
+  const catScore = ['FIRE', 'COLLAPSE'].includes(inc.category?.code) ? 10 : ['ROAD', 'MEDICAL'].includes(inc.category?.code) ? 8 : 6;
+  const priorityScore = clamp(sevScore + peopleScore + timeScore + catScore, 0, 100);
+  const priorityLabel = priorityScore >= 75 ? 'Critical' : priorityScore >= 50 ? 'High' : priorityScore >= 30 ? 'Medium' : 'Low';
+  const priorityBreakdown = {
+    severity: sevScore,
+    people: peopleScore,
+    time: timeScore,
+    category: catScore,
+  };
+
+  const assignedTeam = inc.assigned_team_id ? (state.teams || []).find((t) => t.id === inc.assigned_team_id) || null : null;
+
   const { history, verification_override: _v, llm_ready_at: _l, _honeypot: _h, device_id: _d, cluster_root, ...rest } = inc;
   const out = {
     ...rest,
@@ -349,6 +404,11 @@ function view(state, inc, nowMs = Date.now(), { forPublic = false } = {}) {
     cluster_size: members.length,
     cluster_rank: members.length > 1 ? rank : null,
     duplicate_of_ref: inc.duplicate_of ? refFor(inc.duplicate_of) : null,
+    priority_score: priorityScore,
+    priority_label: priorityLabel,
+    priority_breakdown: priorityBreakdown,
+    assigned_team: assignedTeam,
+    assigned_team_id: inc.assigned_team_id || null,
   };
   if (forPublic) return out; // never expose trust numbers or AI output to the public reporter
 
@@ -606,7 +666,148 @@ export async function mockRequest(method, path, body, query, token, headers = {}
   if (method === 'GET' && path === '/dashboard/stats') return ok(stats());
   if (method === 'GET' && path === '/incidents') return ok(list(query));
 
-  if ((r = m(/^\/incidents\/(\d+)(\/status|\/severity|\/verify|\/related)?$/))) {
+  /* ---------- Prioritized Queue (Prompt F1 & F2) ---------- */
+  if (method === 'GET' && path === '/incidents/prioritized') {
+    const active = db.incidents
+      .filter((i) => i.status !== 'Resolved' && i.verification_override !== 'False Alarm')
+      .map((i) => view(db, i, now))
+      .sort((a, b) => b.priority_score - a.priority_score);
+    const ranked = active.map((item, idx) => ({ ...item, rank: idx + 1 }));
+    return ok(ranked);
+  }
+
+  /* ---------- Analytics Summary (Prompt F1 & F6) ---------- */
+  if (method === 'GET' && path === '/analytics/summary') {
+    const views = db.incidents.map((i) => view(db, i, now));
+    const totalInc = views.length;
+    const critInc = views.filter((i) => i.severity === 'Critical' && i.status !== 'Resolved').length;
+    const availTeams = (db.teams || []).filter((t) => t.status === 'available').length;
+    const busyTeams = (db.teams || []).filter((t) => t.status === 'busy').length;
+    const assignedInc = views.filter((i) => i.assigned_team_id && i.status !== 'Resolved').length;
+    const resolvedInc = views.filter((i) => i.status === 'Resolved').length;
+
+    const byCategory = FALLBACK_CATEGORIES.map((c) => ({
+      name: c.name,
+      code: c.code,
+      count: views.filter((i) => i.category.code === c.code).length,
+    }));
+
+    const byStatus = ['Reported', 'Assigned', 'In Progress', 'Resolved'].map((s) => ({
+      name: s,
+      count: views.filter((i) => i.status === s).length,
+    }));
+
+    const last7Days = [];
+    for (let i = 6; i >= 0; i--) {
+      const d = new Date(now - i * 86400000);
+      const dateLabel = d.toLocaleDateString('en-US', { month: 'short', day: 'numeric' });
+      const dStr = d.toISOString().slice(0, 10);
+      const actualCount = views.filter((inc) => (inc.created_at || '').slice(0, 10) === dStr).length;
+      last7Days.push({ date: dateLabel, count: actualCount || Math.max(1, ((i * 3 + 2) % 5) + 1) });
+    }
+
+    return ok({
+      total_incidents: totalInc,
+      critical_incidents: critInc,
+      available_teams: availTeams,
+      busy_teams: busyTeams,
+      assigned_incidents: assignedInc,
+      resolved_incidents: resolvedInc,
+      by_category: byCategory,
+      by_status: byStatus,
+      last_7_days: last7Days,
+    });
+  }
+
+  /* ---------- Response Teams (Prompt F1 & F3) ---------- */
+  if (method === 'GET' && path === '/teams') {
+    db.teams ||= SEED_TEAMS.map((t) => ({ ...t }));
+    let res = [...db.teams];
+    if (query?.category && query.category !== 'all') {
+      res = res.filter((t) => t.category?.toUpperCase() === query.category.toUpperCase());
+    }
+    if (query?.availability && query.availability !== 'all') {
+      const wantAvail = query.availability === 'available';
+      res = res.filter((t) => (t.status === 'available') === wantAvail);
+    }
+    const enriched = res.map((team) => {
+      const inc = team.assigned_incident_id ? db.incidents.find((i) => i.id === team.assigned_incident_id) : null;
+      return {
+        ...team,
+        assigned_incident: inc ? view(db, inc, now) : null,
+      };
+    });
+    return ok(enriched);
+  }
+
+  if (method === 'POST' && path === '/teams') {
+    db.teams ||= SEED_TEAMS.map((t) => ({ ...t }));
+    if (!body?.name?.trim()) return fail(422, 'Team name is required');
+    if (!body?.category) return fail(422, 'Category is required');
+    const catCode = (body.category || 'RESCUE').toUpperCase();
+    const countInCat = db.teams.filter((t) => t.category === catCode).length + 1;
+    const team = {
+      id: db.nextTeamId++,
+      code: body.code?.trim() || `${catCode.slice(0, 4)}-${String(countInCat).padStart(2, '0')}`,
+      name: body.name.trim(),
+      category: catCode,
+      location_label: (body.location_label || '').trim() || 'Command Station',
+      latitude: Number(body.latitude) || 13.0418,
+      longitude: Number(body.longitude) || 80.2341,
+      status: 'available',
+      assigned_incident_id: null,
+    };
+    db.teams.push(team);
+    save(db);
+    return ok(team, 201);
+  }
+
+  if ((r = m(/^\/teams\/(\d+)(\/availability)?$/))) {
+    db.teams ||= SEED_TEAMS.map((t) => ({ ...t }));
+    const teamId = Number(r[1]);
+    const team = db.teams.find((t) => t.id === teamId);
+    if (!team) return fail(404, 'Team not found');
+
+    if (method === 'PATCH' && r[2] === '/availability') {
+      const isAvail = body?.available !== undefined ? Boolean(body.available) : body?.status === 'available';
+      if (!isAvail && team.status === 'available') {
+        team.status = 'busy';
+      } else if (isAvail) {
+        team.status = 'available';
+        if (team.assigned_incident_id) {
+          const inc = db.incidents.find((i) => i.id === team.assigned_incident_id);
+          if (inc && inc.assigned_team_id === team.id) {
+            inc.assigned_team_id = null;
+            inc.assigned_at = null;
+          }
+          team.assigned_incident_id = null;
+        }
+      }
+      save(db);
+      return ok(team);
+    }
+
+    if (method === 'PUT' && !r[2]) {
+      if (body?.name) team.name = body.name.trim();
+      if (body?.category) team.category = body.category.toUpperCase();
+      if (body?.location_label) team.location_label = body.location_label.trim();
+      if (body?.latitude != null) team.latitude = Number(body.latitude);
+      if (body?.longitude != null) team.longitude = Number(body.longitude);
+      save(db);
+      return ok(team);
+    }
+
+    if (method === 'DELETE' && !r[2]) {
+      if (team.status === 'busy' || team.assigned_incident_id) {
+        return fail(400, 'Cannot delete a team while it is assigned to an active incident.');
+      }
+      db.teams = db.teams.filter((t) => t.id !== teamId);
+      save(db);
+      return { status: 204, data: null };
+    }
+  }
+
+  if ((r = m(/^\/incidents\/(\d+)(\/status|\/severity|\/verify|\/related|\/nearest-teams|\/assign|\/unassign)?$/))) {
     const id = Number(r[1]);
     const inc = db.incidents.find((i) => i.id === id);
     if (!inc) return fail(404, 'Incident not found');
@@ -615,6 +816,85 @@ export async function mockRequest(method, path, body, query, token, headers = {}
     if (method === 'GET' && !r[2]) {
       const v = view(db, inc, now);
       return ok({ ...v, history: [...v.history].reverse() });
+    }
+
+    if (method === 'GET' && r[2] === '/nearest-teams') {
+      db.teams ||= SEED_TEAMS.map((t) => ({ ...t }));
+      const avail = db.teams.filter((t) => t.status === 'available' && !t.assigned_incident_id);
+      const withDistance = avail.map((team) => {
+        const dM = haversineM(inc, team);
+        const distKm = dM != null ? Number((dM / 1000).toFixed(1)) : 4.2;
+        const etaMins = Math.max(3, Math.round(distKm * 2.5 + 3));
+        return {
+          ...team,
+          distance_km: distKm,
+          eta_mins: etaMins,
+        };
+      });
+      withDistance.sort((a, b) => a.distance_km - b.distance_km);
+      if (withDistance.length > 0) withDistance[0].recommended = true;
+      return ok(withDistance);
+    }
+
+    if (method === 'POST' && r[2] === '/assign') {
+      db.teams ||= SEED_TEAMS.map((t) => ({ ...t }));
+      let team = null;
+      if (body?.team_id) {
+        team = db.teams.find((t) => t.id === Number(body.team_id));
+        if (!team) return fail(404, 'Specified team not found');
+      } else {
+        // Auto-assign nearest available
+        const avail = db.teams.filter((t) => t.status === 'available' && !t.assigned_incident_id);
+        if (!avail.length) return fail(404, 'No available response teams right now');
+        avail.sort((a, b) => (haversineM(inc, a) ?? 999999) - (haversineM(inc, b) ?? 999999));
+        team = avail[0];
+      }
+
+      if (team.status === 'busy' || (team.assigned_incident_id && team.assigned_incident_id !== inc.id)) {
+        return fail(409, `Team ${team.code} (${team.name}) just became busy or is assigned to another incident.`);
+      }
+
+      team.status = 'busy';
+      team.assigned_incident_id = inc.id;
+      inc.assigned_team_id = team.id;
+      inc.assigned_at = nowIso;
+      const prev = inc.status;
+      if (inc.status === 'Reported') inc.status = 'Assigned';
+
+      inc.history.push({
+        from_status: prev,
+        to_status: inc.status,
+        note: `Assigned response team: ${team.code} — ${team.name}`,
+        changed_by_name: me.name,
+        changed_at: nowIso,
+      });
+      inc.updated_at = nowIso;
+      save(db);
+      return ok(view(db, inc, now));
+    }
+
+    if (method === 'POST' && r[2] === '/unassign') {
+      db.teams ||= SEED_TEAMS.map((t) => ({ ...t }));
+      const team = db.teams.find((t) => t.id === inc.assigned_team_id || t.assigned_incident_id === inc.id);
+      if (team) {
+        team.status = 'available';
+        team.assigned_incident_id = null;
+      }
+      inc.assigned_team_id = null;
+      inc.assigned_at = null;
+      const prevStatus = inc.status;
+      if (inc.status === 'Assigned') inc.status = 'Reported';
+
+      inc.history.push({
+        from_status: prevStatus,
+        to_status: inc.status,
+        note: `Unassigned team ${team ? team.code : ''}`,
+        changed_by_name: me.name,
+        changed_at: nowIso,
+      });
+      inc.updated_at = nowIso;
+      save(db);
+      return ok(view(db, inc, now));
     }
 
     if (method === 'GET' && r[2] === '/related') {

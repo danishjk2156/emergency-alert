@@ -8,10 +8,12 @@ import DashboardPage from './pages/DashboardPage';
 import IncidentDetailPage from './pages/IncidentDetailPage';
 import IncidentsPage from './pages/IncidentsPage';
 import LoginPage from './pages/LoginPage';
+import MapPage from './pages/MapPage';
 import MyReportsPage from './pages/MyReportsPage';
 import RegisterPage from './pages/RegisterPage';
 import ReportPage from './pages/ReportPage';
 import ReportSuccessPage from './pages/ReportSuccessPage';
+import TeamsPage from './pages/TeamsPage';
 import TrackPage from './pages/TrackPage';
 import UserLoginPage from './pages/UserLoginPage';
 
@@ -52,6 +54,8 @@ export default function App() {
               <Route index element={<DashboardPage />} />
               <Route path="incidents" element={<IncidentsPage />} />
               <Route path="incidents/:id" element={<IncidentDetailPage />} />
+              <Route path="teams" element={<TeamsPage />} />
+              <Route path="map" element={<MapPage />} />
             </Route>
             <Route element={<PublicLayout />}>
               <Route path="*" element={<NotFound />} />

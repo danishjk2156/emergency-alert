@@ -1,101 +1,75 @@
 import { useCallback, useEffect, useRef, useState } from 'react';
 import { Link } from 'react-router-dom';
-import { getStats, listIncidents } from '../api';
-import ClusterPill from '../components/ClusterPill';
+import {
+  Bar,
+  BarChart,
+  CartesianGrid,
+  Cell,
+  Legend,
+  Line,
+  LineChart,
+  Pie,
+  PieChart,
+  ResponsiveContainer,
+  Tooltip,
+  XAxis,
+  YAxis,
+} from 'recharts';
+import { getAnalyticsSummary, getStats, listIncidents } from '../api';
 import CriticalBanner from '../components/CriticalBanner';
 import { ErrorState } from '../components/EmptyState';
-import Icon, { CategoryIcon } from '../components/Icon';
+import Icon from '../components/Icon';
 import IncidentTable from '../components/IncidentTable';
+import PriorityQueue from '../components/PriorityQueue';
 import SectionTitle from '../components/SectionTitle';
 import Spinner from '../components/Spinner';
-import StatCard from '../components/StatCard';
-import { FALLBACK_CATEGORIES, SEVERITIES, SEVERITY_BAR, STATUSES, STATUS_BAR, formatTime } from '../constants';
+import { formatTime } from '../constants';
 
-const REFRESH_MS = 15000;
+const REFRESH_MS = 30000;
 
-const MINI_TONES = {
-  blue: 'border-l-blue-600 text-blue-800',
-  slate: 'border-l-slate-400 text-ink',
-  amber: 'border-l-amber-500 text-amber-800',
-  gray: 'border-l-gray-400 text-gray-600',
-  red: 'border-l-brand text-brand-dark',
-};
+const DONUT_COLORS = ['#ef4444', '#f97316', '#3b82f6', '#8b5cf6', '#10b981', '#64748b'];
 
-function MiniStat({ label, value, tone, icon, to }) {
-  const body = (
-    <>
-      <span className="flex items-center justify-between gap-2">
-        <span className="text-[10.5px] font-black uppercase tracking-[0.12em] text-ink-3">{label}</span>
-        <Icon name={icon} className="h-4 w-4 opacity-70" />
-      </span>
-      <span className="mt-1 block text-2xl font-black tabular-nums">{value ?? '–'}</span>
-    </>
-  );
-  const cls = `card block border-l-4 px-3.5 py-3 transition-all duration-300 ${MINI_TONES[tone]}`;
-  return to ? (
-    <Link to={to} className={`${cls} card-hover`}>
-      {body}
-    </Link>
-  ) : (
-    <div className={cls}>{body}</div>
-  );
-}
+function AnalyticsCard({ label, value, icon, tone = 'default', sub, pulse = false, loading }) {
+  const tones = {
+    default: 'border-l-slate-400 text-ink',
+    blue: 'border-l-blue-600 text-blue-900',
+    red: 'border-l-danger text-danger-dark',
+    emerald: 'border-l-emerald-600 text-emerald-900',
+    amber: 'border-l-amber-500 text-amber-900',
+    indigo: 'border-l-indigo-600 text-indigo-900',
+  };
 
-function StackedBar({ title, keys, counts, colors }) {
-  const total = keys.reduce((s, k) => s + (counts[k] || 0), 0);
   return (
-    <div>
-      <h3 className="mb-2 text-[11px] font-black uppercase tracking-[0.12em] text-ink-3">{title}</h3>
-      <div className="flex h-4 overflow-hidden rounded bg-black/10" role="img" aria-label={`${title}: ${keys.map((k) => `${k} ${counts[k] || 0}`).join(', ')}`}>
-        {total > 0 &&
-          keys.map((k) =>
-            counts[k] ? (
-              <div key={k} className={`${colors[k]} transition-all duration-700 ease-out`} style={{ width: `${(counts[k] / total) * 100}%` }} title={`${k}: ${counts[k]}`} />
-            ) : null,
-          )}
+    <div
+      className={`card relative overflow-hidden rounded-xl border border-border border-l-4 p-4 shadow-sm transition-all duration-300 ${
+        tones[tone]
+      } ${pulse ? 'bg-red-50/70 border-l-danger animate-[pulse_2s_cubic-bezier(0.4,0,0.6,1)_infinite]' : 'bg-white'}`}
+    >
+      <div className="flex items-center justify-between gap-2">
+        <span className="text-[11px] font-black uppercase tracking-wider text-ink-muted">
+          {label}
+        </span>
+        <span className="grid h-7 w-7 place-items-center rounded-lg bg-paper text-ink">
+          <Icon name={icon} className="h-4 w-4" />
+        </span>
       </div>
-      <ul className="mt-2.5 flex flex-wrap gap-x-4 gap-y-1 text-xs text-ink-2">
-        {keys.map((k) => (
-          <li key={k} className="inline-flex items-center gap-1.5">
-            <span className={`h-2.5 w-2.5 rounded-sm ${colors[k]}`} aria-hidden="true" />
-            {k} <strong className="tabular-nums text-ink">{counts[k] || 0}</strong>
-          </li>
-        ))}
-      </ul>
+      <div className="mt-2">
+        {loading ? (
+          <div className="h-8 w-16 bg-paper animate-pulse rounded" />
+        ) : (
+          <span className="font-mono text-2xl font-black text-ink tabular-nums">
+            {value ?? 0}
+          </span>
+        )}
+      </div>
+      {sub && <p className="mt-1 text-[11px] text-ink-muted truncate">{sub}</p>}
     </div>
-  );
-}
-
-function CategoryBars({ data }) {
-  const rows = FALLBACK_CATEGORIES.map((c) => {
-    const hit = data.find((d) => d.code === c.code);
-    return { ...c, ...(hit || {}), count: hit ? hit.count : 0 };
-  });
-  const extra = data.filter((d) => !FALLBACK_CATEGORIES.some((c) => c.code === d.code));
-  const all = [...rows, ...extra];
-  const max = Math.max(1, ...all.map((r) => r.count));
-  return (
-    <ul className="stagger space-y-2">
-      {all.map((r) => (
-        <li key={r.code}>
-          <Link to={`/admin/incidents?category=${encodeURIComponent(r.code)}`} className="group flex min-h-[38px] items-center gap-3 rounded px-1 text-sm transition-colors hover:bg-paper">
-            <span className="grid h-8 w-8 shrink-0 place-items-center rounded-full bg-brand-soft text-brand transition-transform duration-300 group-hover:scale-110">
-              <CategoryIcon code={r.code} className="h-4 w-4" />
-            </span>
-            <span className="w-36 shrink-0 truncate font-semibold text-ink-2">{r.name}</span>
-            <span className="h-3 flex-1 overflow-hidden rounded bg-black/[0.07]">
-              <span className="block h-full rounded bg-charcoal transition-all duration-700 ease-out group-hover:bg-brand" style={{ width: `${(r.count / max) * 100}%` }} />
-            </span>
-            <strong className="w-8 text-right tabular-nums text-ink">{r.count}</strong>
-          </Link>
-        </li>
-      ))}
-    </ul>
   );
 }
 
 export default function DashboardPage() {
   const [stats, setStats] = useState(null);
+  const [analytics, setAnalytics] = useState(null);
   const [latest, setLatest] = useState([]);
   const [loading, setLoading] = useState(true);
   const [refreshing, setRefreshing] = useState(false);
@@ -104,30 +78,50 @@ export default function DashboardPage() {
   const [critBreakdown, setCritBreakdown] = useState('');
   const alive = useRef(true);
 
-  const load = useCallback(async (manual = false) => {
+  const loadData = useCallback(async (manual = false) => {
     if (manual) setRefreshing(true);
     try {
-      const [s, recent] = await Promise.all([getStats(), listIncidents({ sort: 'newest', limit: 5 })]);
+      const [s, a, recent] = await Promise.all([
+        getStats().catch(() => null),
+        getAnalyticsSummary().catch(() => null),
+        listIncidents({ sort: 'newest', limit: 5 }).catch(() => ({ items: [] })),
+      ]);
       if (!alive.current) return;
-      // Trust layer: "3 active critical (2 corroborated, 1 unverified)"
-      if (s.has_trust && s.critical_active > 0) {
+
+      if (s?.has_trust && s?.critical_active > 0) {
         try {
           const crit = await listIncidents({ severity: 'Critical', sort: 'priority', limit: 50 });
-          const active = crit.items.filter((i) => i.status !== 'Resolved' && i.verification_status !== 'False Alarm');
-          const corroborated = active.filter((i) => i.verification_status === 'Corroborated' || i.verification_status === 'Verified').length;
+          const active = (crit.items || []).filter(
+            (i) => i.status !== 'Resolved' && i.verification_status !== 'False Alarm',
+          );
+          const corroborated = active.filter(
+            (i) => i.verification_status === 'Corroborated' || i.verification_status === 'Verified',
+          ).length;
           const unverified = active.length - corroborated;
-          if (alive.current) setCritBreakdown(active.length ? [corroborated && `${corroborated} corroborated`, unverified && `${unverified} unverified`].filter(Boolean).join(', ') : '');
+          if (alive.current) {
+            setCritBreakdown(
+              active.length
+                ? [corroborated && `${corroborated} corroborated`, unverified && `${unverified} unverified`]
+                    .filter(Boolean)
+                    .join(', ')
+                : '',
+            );
+          }
         } catch {
           if (alive.current) setCritBreakdown('');
         }
-      } else setCritBreakdown('');
+      } else {
+        if (alive.current) setCritBreakdown('');
+      }
+
       if (!alive.current) return;
       setStats(s);
-      setLatest(recent.items);
+      setAnalytics(a);
+      setLatest(recent.items || []);
       setError('');
       setUpdatedAt(new Date());
     } catch (e) {
-      if (alive.current) setError(e.message || 'Could not load the dashboard.');
+      if (alive.current) setError(e.message || 'Could not load dashboard data.');
     } finally {
       if (alive.current) {
         setLoading(false);
@@ -138,143 +132,272 @@ export default function DashboardPage() {
 
   useEffect(() => {
     alive.current = true;
-    load();
-    const t = setInterval(() => load(), REFRESH_MS);
+    loadData();
+    const interval = setInterval(() => loadData(), REFRESH_MS);
     return () => {
       alive.current = false;
-      clearInterval(t);
+      clearInterval(interval);
     };
-  }, [load]);
+  }, [loadData]);
 
-  const resolvedPct = stats?.total ? Math.round((stats.resolved / stats.total) * 100) : 0;
-  const hasReporterSplit = stats && stats.anonymous != null && stats.registered != null;
+  // Derived metrics from summary
+  const totalInc = analytics?.total_incidents ?? stats?.total ?? 0;
+  const critInc = analytics?.critical_incidents ?? stats?.critical_active ?? 0;
+  const availTeams = analytics?.available_teams ?? 0;
+  const busyTeams = analytics?.busy_teams ?? 0;
+  const assignedInc = analytics?.assigned_incidents ?? 0;
+  const resolvedInc = analytics?.resolved_incidents ?? stats?.resolved ?? 0;
+
+  // Chart data
+  const categoryData = (analytics?.by_category || []).map((c) => ({
+    name: c.name || c.code,
+    value: c.count,
+  }));
+
+  const statusData = (analytics?.by_status || []).map((s) => ({
+    status: s.name,
+    incidents: s.count,
+  }));
+
+  const timelineData = analytics?.last_7_days || [];
 
   return (
     <div className="space-y-6">
+      {/* Title & Live Badge */}
       <div className="flex flex-wrap items-end justify-between gap-3">
         <SectionTitle
           as="h1"
           sub={
             <span className="inline-flex items-center gap-2">
               <span className="relative flex h-2 w-2" aria-hidden="true">
-                <span className="absolute inline-flex h-full w-full animate-ping rounded-full bg-green-600 opacity-75" />
-                <span className="relative inline-flex h-2 w-2 rounded-full bg-green-700" />
+                <span className="absolute inline-flex h-full w-full animate-ping rounded-full bg-emerald-500 opacity-75" />
+                <span className="relative inline-flex h-2 w-2 rounded-full bg-emerald-600" />
               </span>
-              Live overview · auto-refresh every 15s
+              Real-time analytics · auto-refreshes every 30s
               {updatedAt && <span className="hidden sm:inline"> · updated {formatTime(updatedAt)}</span>}
             </span>
           }
         >
-          Emergency dashboard
+          Emergency Operations Dashboard
         </SectionTitle>
-        <button type="button" onClick={() => load(true)} disabled={refreshing} className="btn">
-          {refreshing ? <Spinner /> : <Icon name="refresh" className="h-4 w-4" />} Refresh
+        <button
+          type="button"
+          onClick={() => loadData(true)}
+          disabled={refreshing}
+          className="inline-flex items-center gap-1.5 rounded-lg border border-border bg-white px-3.5 py-2 text-xs font-bold text-ink hover:bg-paper transition-colors shadow-sm"
+        >
+          {refreshing ? <Spinner /> : <Icon name="refresh" className="h-4 w-4" />}
+          Refresh
         </button>
       </div>
 
-      {error && <ErrorState message={error} onRetry={() => load(true)} />}
+      {error && <ErrorState message={error} onRetry={() => loadData(true)} />}
 
-      {stats && <CriticalBanner count={stats.critical_active} items={stats.recent_critical} breakdown={critBreakdown} />}
-
-      <div className="stagger grid grid-cols-2 gap-3 sm:gap-4 lg:grid-cols-4">
-        <StatCard label="Total reported" value={stats?.total ?? 0} loading={loading} icon="inbox" sub="all time" />
-        <StatCard label="Critical" value={stats?.critical ?? 0} tone="critical" icon="siren" loading={loading} sub={`${stats?.critical_active ?? 0} active`} />
-        <StatCard label="Pending" value={stats?.pending ?? 0} tone="amber" icon="clock" loading={loading} sub="not resolved" />
-        <StatCard label="Resolved" value={stats?.resolved ?? 0} tone="green" icon="check-circle" loading={loading} sub={`${resolvedPct}% of total`} />
-      </div>
-
-      {stats?.has_trust && (
-        <div className="grid gap-4 2xl:grid-cols-[minmax(0,1.6fr)_minmax(0,1fr)]">
-          <div className="stagger grid grid-cols-2 gap-2.5 sm:grid-cols-3 lg:grid-cols-5">
-            <MiniStat label="Corroborated" value={stats.corroborated} tone="blue" icon="users" to="/admin/incidents?verification_status=Corroborated" />
-            <MiniStat label="Unverified" value={stats.unverified} tone="slate" icon="circle-dashed" to="/admin/incidents?verification_status=Unverified" />
-            <MiniStat label="Suspicious" value={stats.suspicious} tone="amber" icon="alert" to="/admin/incidents?max_trust=29" />
-            <MiniStat label="False alarms" value={stats.false_alarms} tone="gray" icon="x" to="/admin/incidents?verification_status=False%20Alarm" />
-            <MiniStat label="Rate-limited today" value={stats.rate_limited_today} tone="red" icon="timer" />
-          </div>
-          {stats.largest_cluster ? (
-            <Link
-              to={`/admin/incidents/${stats.largest_cluster.root_id}`}
-              className="card card-hover group flex animate-fade-up items-center gap-4 border-l-4 border-l-indigo-600 p-4"
-            >
-              <span className="grid h-11 w-11 shrink-0 place-items-center rounded-full bg-indigo-50 text-indigo-700">
-                <Icon name="layers" />
-              </span>
-              <span className="min-w-0 flex-1">
-                <span className="block text-[10.5px] font-black uppercase tracking-[0.12em] text-ink-3">
-                  Largest active cluster{stats.active_clusters != null && ` · ${stats.active_clusters} active`}
-                </span>
-                <span className="mt-0.5 block truncate font-black text-ink">{stats.largest_cluster.title}</span>
-                <span className="mt-1 inline-block">
-                  <ClusterPill size={stats.largest_cluster.size} />
-                </span>
-              </span>
-              <span className="inline-flex items-center gap-1 text-sm font-bold text-brand">
-                View <Icon name="arrow-right" className="h-4 w-4 transition-transform group-hover:translate-x-0.5" />
-              </span>
-            </Link>
-          ) : (
-            <div className="card flex items-center gap-3 p-4 text-sm text-ink-3">
-              <Icon name="layers" className="h-5 w-5" /> No active clusters right now.
-            </div>
-          )}
-        </div>
+      {/* Critical Alert Banner (Kept intact) */}
+      {stats && (
+        <CriticalBanner
+          count={stats.critical_active}
+          items={stats.recent_critical}
+          breakdown={critBreakdown}
+        />
       )}
 
-      <div className="grid gap-4 lg:grid-cols-[minmax(0,1.3fr)_minmax(0,1fr)]">
+      {/* Six Analytics Stat Cards (Prompt F6) */}
+      <div className="grid grid-cols-2 gap-3 sm:gap-4 md:grid-cols-3 lg:grid-cols-6">
+        <AnalyticsCard
+          label="Total Incidents"
+          value={totalInc}
+          icon="inbox"
+          tone="default"
+          sub="cumulative intake"
+          loading={loading}
+        />
+        <AnalyticsCard
+          label="Critical Incidents"
+          value={critInc}
+          icon="siren"
+          tone="red"
+          sub={critInc > 0 ? 'Requires immediate action' : 'All clear'}
+          pulse={critInc > 0}
+          loading={loading}
+        />
+        <AnalyticsCard
+          label="Available Teams"
+          value={availTeams}
+          icon="users"
+          tone="emerald"
+          sub="ready for dispatch"
+          loading={loading}
+        />
+        <AnalyticsCard
+          label="Busy Teams"
+          value={busyTeams}
+          icon="siren"
+          tone="amber"
+          sub="on active missions"
+          loading={loading}
+        />
+        <AnalyticsCard
+          label="Assigned Incidents"
+          value={assignedInc}
+          icon="pin"
+          tone="indigo"
+          sub="en route or on scene"
+          loading={loading}
+        />
+        <AnalyticsCard
+          label="Resolved Incidents"
+          value={resolvedInc}
+          icon="check-circle"
+          tone="blue"
+          sub="closed safely"
+          loading={loading}
+        />
+      </div>
+
+      {/* Analytics Charts Section (Prompt F6) */}
+      <div className="grid gap-5 lg:grid-cols-3">
+        {/* 1. Donut Chart: By Category */}
         <section className="card p-5">
-          <h2 className="text-[13px] font-black uppercase tracking-wide text-ink">Incidents by category</h2>
-          <span className="title-bar mb-4" aria-hidden="true" />
+          <div className="mb-3">
+            <h2 className="text-xs font-black uppercase tracking-wider text-ink">Incidents by Category</h2>
+            <p className="text-[11px] text-ink-muted">Distribution across hazard classifications</p>
+          </div>
           {loading ? (
-            <div className="space-y-3">
-              {FALLBACK_CATEGORIES.map((c) => (
-                <div key={c.code} className="skeleton h-6" />
-              ))}
-            </div>
+            <div className="h-64 w-full bg-paper animate-pulse rounded-lg" />
           ) : (
-            <CategoryBars data={stats?.by_category || []} />
+            <div className="h-64 w-full">
+              <ResponsiveContainer width="100%" height="100%">
+                <PieChart>
+                  <Pie
+                    data={categoryData}
+                    cx="50%"
+                    cy="45%"
+                    innerRadius={55}
+                    outerRadius={85}
+                    paddingAngle={3}
+                    dataKey="value"
+                  >
+                    {categoryData.map((entry, index) => (
+                      <Cell key={`cell-${index}`} fill={DONUT_COLORS[index % DONUT_COLORS.length]} />
+                    ))}
+                  </Pie>
+                  <Tooltip
+                    contentStyle={{
+                      backgroundColor: '#0f172a',
+                      borderColor: '#334155',
+                      borderRadius: '8px',
+                      color: '#ffffff',
+                      fontSize: '11px',
+                    }}
+                  />
+                  <Legend
+                    verticalAlign="bottom"
+                    iconType="circle"
+                    iconSize={8}
+                    wrapperStyle={{ fontSize: '11px', paddingTop: '10px' }}
+                  />
+                </PieChart>
+              </ResponsiveContainer>
+            </div>
           )}
         </section>
 
-        <section className="card space-y-6 p-5">
-          <div>
-            <h2 className="text-[13px] font-black uppercase tracking-wide text-ink">Status &amp; severity</h2>
-            <span className="title-bar" aria-hidden="true" />
+        {/* 2. Bar Chart: Incidents by Status */}
+        <section className="card p-5">
+          <div className="mb-3">
+            <h2 className="text-xs font-black uppercase tracking-wider text-ink">Incidents by Status</h2>
+            <p className="text-[11px] text-ink-muted">Lifecycle stage progression</p>
           </div>
           {loading ? (
-            <>
-              <div className="skeleton h-10" />
-              <div className="skeleton h-10" />
-            </>
+            <div className="h-64 w-full bg-paper animate-pulse rounded-lg" />
           ) : (
-            <>
-              <StackedBar title="By status" keys={STATUSES} counts={stats?.by_status || {}} colors={STATUS_BAR} />
-              <StackedBar title="By severity" keys={SEVERITIES} counts={stats?.by_severity || {}} colors={SEVERITY_BAR} />
-              {hasReporterSplit && (
-                <StackedBar
-                  title="By reporter"
-                  keys={['Registered', 'Anonymous']}
-                  counts={{ Registered: stats.registered, Anonymous: stats.anonymous }}
-                  colors={{ Registered: 'bg-charcoal', Anonymous: 'bg-gray-400' }}
-                />
-              )}
-            </>
+            <div className="h-64 w-full">
+              <ResponsiveContainer width="100%" height="100%">
+                <BarChart data={statusData} margin={{ top: 10, right: 10, left: -20, bottom: 20 }}>
+                  <CartesianGrid strokeDasharray="3 3" vertical={false} opacity={0.3} />
+                  <XAxis
+                    dataKey="status"
+                    tick={{ fontSize: 10, fill: '#64748b' }}
+                    interval={0}
+                    angle={-15}
+                    textAnchor="end"
+                  />
+                  <YAxis tick={{ fontSize: 10, fill: '#64748b' }} allowDecimals={false} />
+                  <Tooltip
+                    contentStyle={{
+                      backgroundColor: '#0f172a',
+                      borderColor: '#334155',
+                      borderRadius: '8px',
+                      color: '#ffffff',
+                      fontSize: '11px',
+                    }}
+                  />
+                  <Bar dataKey="incidents" fill="#D7191F" radius={[4, 4, 0, 0]} />
+                </BarChart>
+              </ResponsiveContainer>
+            </div>
+          )}
+        </section>
+
+        {/* 3. Line Chart: Incidents Over Last 7 Days */}
+        <section className="card p-5">
+          <div className="mb-3">
+            <h2 className="text-xs font-black uppercase tracking-wider text-ink">Intake Over Last 7 Days</h2>
+            <p className="text-[11px] text-ink-muted">Daily volume trend</p>
+          </div>
+          {loading ? (
+            <div className="h-64 w-full bg-paper animate-pulse rounded-lg" />
+          ) : (
+            <div className="h-64 w-full">
+              <ResponsiveContainer width="100%" height="100%">
+                <LineChart data={timelineData} margin={{ top: 10, right: 10, left: -20, bottom: 0 }}>
+                  <CartesianGrid strokeDasharray="3 3" vertical={false} opacity={0.3} />
+                  <XAxis dataKey="date" tick={{ fontSize: 10, fill: '#64748b' }} />
+                  <YAxis tick={{ fontSize: 10, fill: '#64748b' }} allowDecimals={false} />
+                  <Tooltip
+                    contentStyle={{
+                      backgroundColor: '#0f172a',
+                      borderColor: '#334155',
+                      borderRadius: '8px',
+                      color: '#ffffff',
+                      fontSize: '11px',
+                    }}
+                  />
+                  <Line
+                    type="monotone"
+                    dataKey="count"
+                    stroke="#2563eb"
+                    strokeWidth={2.5}
+                    dot={{ r: 4, fill: '#2563eb' }}
+                    activeDot={{ r: 6 }}
+                  />
+                </LineChart>
+              </ResponsiveContainer>
+            </div>
           )}
         </section>
       </div>
 
+      {/* Priority Dispatch Queue (Prompt F2) */}
+      <PriorityQueue />
+
+      {/* Latest Incidents Table */}
       <section className="card p-5">
         <div className="mb-4 flex items-end justify-between">
           <div>
-            <h2 className="text-[13px] font-black uppercase tracking-wide text-ink">Latest incidents</h2>
+            <h2 className="text-xs font-black uppercase tracking-wider text-ink">Recent Incoming Reports</h2>
             <span className="title-bar" aria-hidden="true" />
           </div>
-          <Link to="/admin/incidents?sort=newest" className="inline-flex items-center gap-1 text-sm font-bold text-brand hover:underline">
-            View all <Icon name="arrow-right" className="h-4 w-4" />
+          <Link
+            to="/admin/incidents?sort=newest"
+            className="inline-flex items-center gap-1 text-xs font-bold text-brand hover:underline"
+          >
+            View all incidents <Icon name="arrow-right" className="h-3.5 w-3.5" />
           </Link>
         </div>
         {!loading && latest.length === 0 ? (
-          <p className="py-10 text-center text-sm text-ink-3">No incidents yet.</p>
+          <p className="py-10 text-center text-xs text-ink-muted">No incidents recorded yet.</p>
         ) : (
           <IncidentTable items={latest} loading={loading} compact />
         )}

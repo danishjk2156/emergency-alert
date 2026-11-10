@@ -1,9 +1,11 @@
 import { useCallback, useEffect, useState } from 'react';
 import { Link, useNavigate, useParams } from 'react-router-dom';
-import { deleteIncident, getIncident, updateSeverity, updateStatus, verifyIncident } from '../api';
+import { deleteIncident, getIncident, getTeams, updateSeverity, updateStatus, verifyIncident } from '../api';
+import AssignmentPanel from '../components/AssignmentPanel';
 import ClusterPill from '../components/ClusterPill';
 import LlmInsight from '../components/LlmInsight';
 import LocationInfo from '../components/LocationInfo';
+import MapView from '../components/MapView';
 import RelatedReports from '../components/RelatedReports';
 import TrustMeter from '../components/TrustMeter';
 import VerificationBadge from '../components/VerificationBadge';
@@ -48,6 +50,7 @@ export default function IncidentDetailPage() {
   const [loading, setLoading] = useState(true);
   const [error, setError] = useState('');
   const [notFound, setNotFound] = useState(false);
+  const [teams, setTeams] = useState([]);
 
   const [nextStatus, setNextStatus] = useState('');
   const [note, setNote] = useState('');
@@ -65,8 +68,12 @@ export default function IncidentDetailPage() {
   const load = useCallback(async () => {
     setError('');
     try {
-      const data = await getIncident(id);
+      const [data, teamsData] = await Promise.all([
+        getIncident(id),
+        getTeams().catch(() => []),
+      ]);
       setIncident(data);
+      setTeams(teamsData || []);
       setNextStatus(data.status);
       setNotFound(false);
     } catch (e) {
@@ -344,17 +351,34 @@ export default function IncidentDetailPage() {
             </dl>
           </Panel>
 
-          <div className="grid min-h-[150px] place-items-center rounded-md border-2 border-dashed border-field/40 bg-white p-4 text-center text-sm text-ink-3">
-            <div>
-              <Icon name="map" className="mx-auto h-8 w-8 text-ink-3" />
-              <p className="mt-2 font-black uppercase tracking-wide text-ink-2">Map view: coming in Round 2</p>
-              {hasCoords && (
-                <p className="mt-1 font-mono text-xs tabular-nums">
-                  {Number(incident.latitude).toFixed(5)}, {Number(incident.longitude).toFixed(5)}
-                </p>
-              )}
+          {hasCoords ? (
+            <div className="overflow-hidden rounded-xl border border-border shadow-sm">
+              <div className="bg-paper px-4 py-2 text-[11px] font-bold uppercase tracking-wider text-ink-muted flex items-center justify-between border-b border-border">
+                <span className="flex items-center gap-1.5">
+                  <Icon name="map" className="h-3.5 w-3.5 text-brand" />
+                  Incident Geolocation & Dispatch Route
+                </span>
+                <span className="font-mono text-ink">
+                  {Number(incident.latitude).toFixed(4)}, {Number(incident.longitude).toFixed(4)}
+                </span>
+              </div>
+              <MapView
+                incidents={[incident]}
+                teams={teams}
+                selectedIncidentId={incident.id}
+                height="280px"
+                compact
+              />
             </div>
-          </div>
+          ) : (
+            <div className="grid min-h-[150px] place-items-center rounded-md border-2 border-dashed border-field/40 bg-white p-4 text-center text-sm text-ink-3">
+              <div>
+                <Icon name="map" className="mx-auto h-8 w-8 text-ink-3" />
+                <p className="mt-2 font-black uppercase tracking-wide text-ink-2">No GPS coordinates recorded</p>
+                <p className="text-xs text-ink-muted">{incident.location}</p>
+              </div>
+            </div>
+          )}
         </div>
 
         <div className="stagger min-w-0 space-y-5">
@@ -428,6 +452,8 @@ export default function IncidentDetailPage() {
             </button>
             {!statusChanged && <p className="mt-2 text-center text-xs text-ink-3">Pick a different status to save.</p>}
           </Panel>
+
+          <AssignmentPanel incident={incident} onIncidentUpdated={load} />
 
           <Panel title="Activity timeline" icon="clock">
             <Timeline history={incident.history} createdAt={incident.created_at} reporterLabel={anon ? 'anonymous reporter' : incident.reporter?.name || 'registered user'} />

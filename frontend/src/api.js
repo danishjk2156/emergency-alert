@@ -239,6 +239,15 @@ export function normalizeIncident(raw) {
     status: normStatus(raw.status),
     severity_score: Number(raw.severity_score ?? 0),
     severity_reasons: Array.isArray(raw.severity_reasons) ? raw.severity_reasons.map(normReason) : [],
+    priority_score: Number(raw.priority_score ?? raw.severity_score ?? 50),
+    priority_label: raw.priority_label ?? normSeverity(raw.severity),
+    priority_breakdown: raw.priority_breakdown ?? {
+      severity: Math.round(Number(raw.severity_score ?? 30) * 0.4),
+      people: Math.min(30, Number(raw.people_affected ?? 0) * 3),
+      time: 15,
+      category: 15,
+    },
+    assigned_team: raw.assigned_team ?? null,
     people_affected: Number(raw.people_affected ?? 0),
     reporter,
     // A report is anonymous unless the server linked it to an account.
@@ -436,4 +445,54 @@ export async function getStats() {
     by_category: byCategory.map((c) => ({ ...categoryByCode(c.code), ...c, count: Number(c.count ?? 0) })),
     recent_critical: Array.isArray(s.recent_critical) ? s.recent_critical : [],
   };
+}
+
+/* ---------------- Response Teams & Prioritization (Prompt F1) ---------------- */
+
+export async function getPrioritizedIncidents() {
+  const data = await request('/incidents/prioritized', { auth: 'required' });
+  const items = Array.isArray(data) ? data : data.items ?? [];
+  return items.map((item, idx) => ({
+    ...normalizeIncident(item),
+    rank: item.rank ?? idx + 1,
+  }));
+}
+
+export async function getTeams(params = {}) {
+  const data = await request('/teams', { auth: 'required', query: params });
+  return Array.isArray(data) ? data : data.items ?? [];
+}
+
+export async function createTeam(body) {
+  return await request('/teams', { method: 'POST', auth: 'required', body });
+}
+
+export async function updateTeam(id, body) {
+  return await request(`/teams/${id}`, { method: 'PUT', auth: 'required', body });
+}
+
+export async function deleteTeam(id) {
+  await request(`/teams/${id}`, { method: 'DELETE', auth: 'required' });
+}
+
+export async function setTeamAvailability(id, available) {
+  return await request(`/teams/${id}/availability`, { method: 'PATCH', auth: 'required', body: { available } });
+}
+
+export async function getNearestTeams(incidentId) {
+  const data = await request(`/incidents/${incidentId}/nearest-teams`, { auth: 'required' });
+  return Array.isArray(data) ? data : data.items ?? [];
+}
+
+export async function assignTeam(incidentId, teamId) {
+  const body = teamId ? { team_id: teamId } : {};
+  return await request(`/incidents/${incidentId}/assign`, { method: 'POST', auth: 'required', body });
+}
+
+export async function unassignTeam(incidentId) {
+  return await request(`/incidents/${incidentId}/unassign`, { method: 'POST', auth: 'required' });
+}
+
+export async function getAnalyticsSummary() {
+  return await request('/analytics/summary', { auth: 'required' });
 }
