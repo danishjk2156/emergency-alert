@@ -235,3 +235,25 @@ class DashboardStatsResponse(BaseModel):
     by_severity: dict[str, int]
     by_category: list[DashboardCategoryStat]
     recent_critical: list[RecentCriticalIncident]
+
+
+# ---------------------------------------------------------------------------
+# AI / Gemini Flash Lite Triage Schemas
+# ---------------------------------------------------------------------------
+class AIClassifyRequest(BaseModel):
+    title: str = Field(..., min_length=3, max_length=120)
+    description: str = Field(..., min_length=5, max_length=2000)
+    category_code: str = "OTHER"
+    people_affected: int = Field(default=0, ge=0)
+
+
+class AIAnalysisResponse(BaseModel):
+    model: str
+    severity: str
+    confidence: float
+    severity_score: int
+    summary: str
+    extracted_hazards: list[str]
+    recommended_dispatch: list[str]
+    reasons: list[str]
+

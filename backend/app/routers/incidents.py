@@ -7,8 +7,11 @@ from sqlalchemy.orm import Session
 
 from ..auth import require_admin
 from ..database import get_db
+from ..gemini_triage import classify_with_gemini
 from ..models import Category, Incident, IncidentStatusHistory, User, utc_now
 from ..schemas import (
+    AIAnalysisResponse,
+    AIClassifyRequest,
     IncidentCreate,
     IncidentDetailResponse,
     IncidentListResponse,
@@ -22,6 +25,20 @@ from ..severity import classify
 router = APIRouter(prefix="/incidents", tags=["Incidents"])
 
 
+@router.post("/ai-classify", response_model=AIAnalysisResponse)
+def ai_classify_incident(payload: AIClassifyRequest):
+    """
+    Jury Showcase Endpoint:
+    Classify any incident live using Google Gemini 3.5 Flash Lite with structured reasoning!
+    """
+    return classify_with_gemini(
+        category_code=payload.category_code,
+        people=payload.people_affected,
+        title=payload.title,
+        description=payload.description,
+    )
+
+
 @router.post("", response_model=IncidentResponse, status_code=status.HTTP_201_CREATED)
 def create_incident(
     payload: IncidentCreate,
@@ -29,7 +46,7 @@ def create_incident(
 ):
     """
     Public endpoint: Submit a new emergency report.
-    Calculates severity score, level, and explainable reasons, then saves the incident.
+    Classified via Google Gemini Flash Lite (with rule-based guardrail fallback).
     """
     category = db.query(Category).filter(Category.code == payload.category_code).first()
     if not category:
@@ -38,13 +55,19 @@ def create_incident(
             detail=f"Invalid category code: {payload.category_code}",
         )
 
-    # Classify severity using rule-based triage engine
-    level, score, reasons = classify(
+    # Classify severity using Google Gemini Flash Lite (with safety fallback)
+    ai_result = classify_with_gemini(
         category_code=payload.category_code,
         people=payload.people_affected,
         title=payload.title,
         description=payload.description,
     )
+    level = ai_result["severity"]
+    score = ai_result["severity_score"]
+    reasons = list(ai_result.get("reasons", []))
+    if ai_result.get("summary") and ai_result["summary"] not in reasons:
+        reasons.insert(0, f"AI Assessment: {ai_result['summary']}")
+
 
     now = utc_now()
     incident = Incident(
