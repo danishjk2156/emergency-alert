@@ -3,7 +3,7 @@
 import { FALLBACK_CATEGORIES, SEVERITIES, STATUSES } from './constants';
 import { computeSeverity } from './severity';
 
-const KEY = 'resqnet_mock_v2';
+const KEY = 'resqnet_mock_v3';
 const YEAR = new Date().getFullYear();
 const ADMIN = { id: 1, name: 'Admin', email: 'admin@codeclash.dev', role: 'admin' };
 const MOCK_TOKEN = 'mock-admin-token';
@@ -37,7 +37,7 @@ function seed() {
     const id = i + 1;
     const created = new Date(now - mins * 60000).toISOString();
     const sev = computeSeverity(code, people, `${title} ${description}`);
-    const history = [];
+    const history = [{ from_status: null, to_status: 'Reported', note: 'Initial emergency report logged', changed_by_name: null, changed_at: created }];
     const path = STATUSES.slice(1, STATUSES.indexOf(status) + 1);
     let prev = 'Reported';
     path.forEach((to, k) => {
@@ -212,7 +212,7 @@ export async function mockRequest(method, path, body, query, token) {
       created_at: now,
       updated_at: now,
       resolved_at: null,
-      history: [],
+      history: [{ from_status: null, to_status: 'Reported', note: 'Initial emergency report logged', changed_by_name: null, changed_at: now }],
     };
     db.incidents.push(inc);
     save(db);

@@ -36,15 +36,24 @@ function validate(f) {
   if (loc.length < 3) e.location = 'Location must be at least 3 characters.';
   else if (loc.length > 200) e.location = 'Location must be 200 characters or less.';
   if (!Number.isInteger(f.people_affected) || f.people_affected < 0) e.people_affected = 'Enter 0 or more.';
-  if (f.contact_phone.trim()) {
-    const digits = f.contact_phone.replace(/\D/g, '');
-    if (digits.length < 7 || digits.length > 15 || /[^\d\s+()-]/.test(f.contact_phone)) e.contact_phone = 'Phone must have 7–15 digits.';
+  if (f.contact_name.trim().length > 80) e.contact_name = 'Name must be 80 characters or less.';
+  if (f.contact_phone.trim() && !PHONE_RE.test(normalizePhone(f.contact_phone))) {
+    e.contact_phone = 'Phone must have 7–15 digits (spaces and dashes are fine).';
   }
-  if (f.contact_email.trim() && !/^[^\s@]+@[^\s@]+\.[^\s@]{2,}$/.test(f.contact_email.trim())) {
+  if (f.contact_email.trim() && !EMAIL_RE.test(f.contact_email.trim())) {
     e.contact_email = 'Enter a valid email address.';
   }
   return e;
 }
+
+// Same patterns the backend enforces (backend/app/schemas.py), so a valid form never gets rejected.
+const PHONE_RE = /^\+?[0-9]{7,15}$/;
+const EMAIL_RE = /^[a-zA-Z0-9_.+-]+@[a-zA-Z0-9-]+\.[a-zA-Z0-9-.]+$/;
+/** "+91 98765-43210" → "+919876543210" (keeps one leading +, drops spaces, dashes, brackets, dots). */
+const normalizePhone = (v) => {
+  const t = v.trim();
+  return (t.startsWith('+') ? '+' : '') + t.replace(/\D/g, '');
+};
 
 function Field({ id, label, error, hint, children }) {
   return (
@@ -147,7 +156,9 @@ export default function ReportPage() {
       body.latitude = form.latitude;
       body.longitude = form.longitude;
     }
-    for (const k of ['contact_name', 'contact_phone', 'contact_email']) if (form[k].trim()) body[k] = form[k].trim();
+    if (form.contact_name.trim()) body.contact_name = form.contact_name.trim();
+    if (form.contact_phone.trim()) body.contact_phone = normalizePhone(form.contact_phone);
+    if (form.contact_email.trim()) body.contact_email = form.contact_email.trim();
     try {
       const incident = await createIncident(body);
       toast('Report submitted');
@@ -297,7 +308,7 @@ export default function ReportPage() {
           <p className="mt-1 text-xs text-slate-500">Helps responders reach you. Only the response team can see this.</p>
           <div className="mt-3 grid gap-3 sm:grid-cols-3">
             <Field id="contact_name" label="Name" error={err('contact_name')}>
-              <input {...inputProps('contact_name')} className="input" autoComplete="name" maxLength={100} />
+              <input {...inputProps('contact_name')} className="input" autoComplete="name" maxLength={80} />
             </Field>
             <Field id="contact_phone" label="Phone" error={err('contact_phone')}>
               <input {...inputProps('contact_phone')} className="input" type="tel" autoComplete="tel" inputMode="tel" placeholder="9876543210" />

@@ -1,6 +1,6 @@
 from contextlib import asynccontextmanager
 
-from fastapi import FastAPI, Request, status
+from fastapi import FastAPI, Request
 from fastapi.exceptions import RequestValidationError
 from fastapi.middleware.cors import CORSMiddleware
 from fastapi.responses import JSONResponse
@@ -50,17 +50,25 @@ app.add_middleware(
 @app.exception_handler(RequestValidationError)
 async def validation_exception_handler(request: Request, exc: RequestValidationError):
     """Ensure consistent JSON error structure: {'detail': '...'} with HTTP 422."""
-    errors = exc.errors()
+    # Keep only JSON-safe fields. Raw errors from custom validators carry the
+    # original ValueError in "ctx", which json.dumps cannot serialise (-> 500).
+    errors = [
+        {
+            "loc": [str(part) for part in err.get("loc", [])],
+            "msg": str(err.get("msg", "Validation error")).removeprefix("Value error, "),
+            "type": str(err.get("type", "value_error")),
+        }
+        for err in exc.errors()
+    ]
     if errors:
         first = errors[0]
-        field_loc = " -> ".join([str(loc) for loc in first.get("loc", []) if loc != "body"])
-        msg = first.get("msg", "Validation error")
-        detail_text = f"{field_loc}: {msg}" if field_loc else msg
+        field_loc = " -> ".join(loc for loc in first["loc"] if loc != "body")
+        detail_text = f"{field_loc}: {first['msg']}" if field_loc else first["msg"]
     else:
         detail_text = "Unprocessable Entity"
 
     return JSONResponse(
-        status_code=status.HTTP_422_UNPROCESSABLE_ENTITY,
+        status_code=422,
         content={"detail": detail_text, "errors": errors},
     )
 

@@ -34,12 +34,12 @@ export const STATUS_BAR = {
 
 // Used if GET /categories fails, and to resolve a bare category code.
 export const FALLBACK_CATEGORIES = [
-  { id: 1, code: 'FIRE', name: 'Fire', icon: '🔥', base_weight: 30 },
+  { id: 1, code: 'FIRE', name: 'Fire Emergency', icon: '🔥', base_weight: 30 },
   { id: 2, code: 'ROAD', name: 'Road Accident', icon: '🚗', base_weight: 20 },
-  { id: 3, code: 'MEDICAL', name: 'Medical', icon: '❤️', base_weight: 20 },
+  { id: 3, code: 'MEDICAL', name: 'Medical Emergency', icon: '❤️', base_weight: 20 },
   { id: 4, code: 'FLOOD', name: 'Flood', icon: '🌊', base_weight: 25 },
   { id: 5, code: 'COLLAPSE', name: 'Building Collapse', icon: '🏢', base_weight: 35 },
-  { id: 6, code: 'OTHER', name: 'Other', icon: '⚠️', base_weight: 10 },
+  { id: 6, code: 'OTHER', name: 'Other Emergencies', icon: '⚠️', base_weight: 10 },
 ];
 
 export const categoryByCode = (code) =>
@@ -110,7 +110,14 @@ const dtFmt = new Intl.DateTimeFormat('en-IN', {
 });
 const timeFmt = new Intl.DateTimeFormat('en-IN', { hour: '2-digit', minute: '2-digit' });
 
-const toDate = (v) => (v instanceof Date ? v : new Date(v));
+// The backend stores UTC but SQLite drops the offset, so timestamps arrive as
+// "2026-11-10T06:52:36.97" with no "Z". Treat zone-less ISO strings as UTC.
+const NAIVE_ISO = /^\d{4}-\d{2}-\d{2}T\d{2}:\d{2}(:\d{2}(\.\d+)?)?$/;
+export const toDate = (v) => {
+  if (v instanceof Date) return v;
+  if (typeof v === 'string' && NAIVE_ISO.test(v)) return new Date(`${v}Z`);
+  return new Date(v);
+};
 const valid = (d) => !Number.isNaN(d.getTime());
 
 export function formatDateTime(v) {

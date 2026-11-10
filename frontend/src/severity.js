@@ -1,17 +1,17 @@
-// Client-side mirror of the server's severity rules. Used ONLY for the live
-// preview on the report form. The server's result is final.
+// Client-side mirror of backend/app/severity.py, used ONLY for the live preview
+// on the report form. Same rules, same reason strings. The server's result is final.
 
-const BASE = { FIRE: 30, ROAD: 20, MEDICAL: 20, FLOOD: 25, COLLAPSE: 35, OTHER: 10 };
-const BASE_LABEL = {
-  FIRE: 'Fire',
-  ROAD: 'Road accident',
-  MEDICAL: 'Medical',
+const CATEGORY_BASE = { FIRE: 30, ROAD: 20, MEDICAL: 20, FLOOD: 25, COLLAPSE: 35, OTHER: 10 };
+const CATEGORY_DISPLAY = {
+  FIRE: 'Fire Emergency',
+  ROAD: 'Road Accident',
+  MEDICAL: 'Medical Emergency',
   FLOOD: 'Flood',
-  COLLAPSE: 'Collapse',
-  OTHER: 'Other',
+  COLLAPSE: 'Building Collapse',
+  OTHER: 'Other Emergencies',
 };
 
-const CRITICAL_WORDS = [
+const CRITICAL_KEYWORDS = [
   'trapped',
   'unconscious',
   'not breathing',
@@ -23,25 +23,15 @@ const CRITICAL_WORDS = [
   'child',
   'drowning',
 ];
-const CRITICAL_EACH = 25;
-const CRITICAL_MAX = 40;
+const SERIOUS_KEYWORDS = ['injured', 'smoke', 'rising water', 'stuck', 'elderly', 'burn', 'fracture', 'blocked'];
+const HARD_OVERRIDE_KEYWORDS = ['not breathing', 'explosion', 'trapped'];
 
-const SERIOUS_WORDS = ['injured', 'smoke', 'rising water', 'stuck', 'elderly', 'burn', 'fracture', 'blocked'];
-const SERIOUS_EACH = 10;
-const SERIOUS_MAX = 20;
-
-const LIFE_THREAT = ['trapped', 'explosion', 'not breathing'];
-
-const escape = (s) => s.replace(/[.*+?^${}()|[\]\\]/g, '\\$&');
-// Match at a word start so "children" counts for "child" and "burning" for "burn".
-const has = (text, word) => new RegExp(`\\b${escape(word)}`, 'i').test(text);
-
-function peoplePoints(n) {
-  if (n > 50) return 40;
-  if (n >= 21) return 30;
-  if (n >= 6) return 20;
-  if (n >= 2) return 10;
-  return 0;
+function peoplePoints(people) {
+  if (people <= 1) return 0;
+  if (people <= 5) return 10;
+  if (people <= 20) return 20;
+  if (people <= 50) return 30;
+  return 40;
 }
 
 export function levelFor(score) {
@@ -51,49 +41,52 @@ export function levelFor(score) {
   return 'Critical';
 }
 
-function addKeywords(text, words, each, max, reasons) {
-  let used = 0;
-  for (const w of words) {
-    if (!has(text, w)) continue;
-    const give = Math.min(each, max - used);
-    reasons.push(give > 0 ? `“${w}” +${give}` : `“${w}” (capped)`);
-    used += give;
+function addKeywords(text, words, each, cap, kind, reasons) {
+  let remaining = cap;
+  let added = 0;
+  for (const kw of words) {
+    if (!text.includes(kw)) continue; // plain substring, case-insensitive (text is lower-cased)
+    const pts = Math.min(each, remaining);
+    if (pts > 0) {
+      remaining -= pts;
+      added += pts;
+      reasons.push(`keyword '${kw}' +${pts}`);
+    } else {
+      reasons.push(`keyword '${kw}' (max ${kind} bonus reached)`);
+    }
   }
-  return used;
+  return added;
 }
 
 /**
- * @param {string} categoryCode  FIRE | ROAD | MEDICAL | FLOOD | COLLAPSE | OTHER
- * @param {number} people        people affected
- * @param {string} text          title + description
+ * @param {string} categoryCode FIRE | ROAD | MEDICAL | FLOOD | COLLAPSE | OTHER
+ * @param {number} people       people affected
+ * @param {string} text         title + description
  * @returns {{level: string, score: number, reasons: string[]}}
  */
 export function computeSeverity(categoryCode, people, text) {
-  const code = String(categoryCode || 'OTHER').toUpperCase();
-  const reasons = [];
-  let score = 0;
-
-  const base = BASE[code] ?? BASE.OTHER;
-  reasons.push(`${BASE_LABEL[code] || 'Other'} base +${base}`);
-  score += base;
-
+  const code = String(categoryCode || 'OTHER').trim().toUpperCase();
+  const base = CATEGORY_BASE[code] ?? 10;
   const n = Math.max(0, Math.floor(Number(people) || 0));
+  const lowered = String(text || '').toLowerCase();
+
+  let score = base;
+  const reasons = [`${CATEGORY_DISPLAY[code] || code} base +${base}`];
+
   const pp = peoplePoints(n);
-  if (pp) {
-    reasons.push(`${n} people +${pp}`);
+  if (pp > 0) {
     score += pp;
+    reasons.push(`${n} people affected +${pp}`);
   }
 
-  const t = String(text || '');
-  score += addKeywords(t, CRITICAL_WORDS, CRITICAL_EACH, CRITICAL_MAX, reasons);
-  score += addKeywords(t, SERIOUS_WORDS, SERIOUS_EACH, SERIOUS_MAX, reasons);
+  score += addKeywords(lowered, CRITICAL_KEYWORDS, 25, 40, 'critical', reasons);
+  score += addKeywords(lowered, SERIOUS_KEYWORDS, 10, 20, 'serious', reasons);
+  score = Math.min(score, 100);
 
-  score = Math.min(100, score);
   let level = levelFor(score);
-
-  if (n >= 5 && LIFE_THREAT.some((w) => has(t, w)) && level !== 'Critical') {
+  if (n >= 5 && HARD_OVERRIDE_KEYWORDS.some((kw) => lowered.includes(kw))) {
     level = 'Critical';
-    reasons.push('5+ people & life threat → Critical');
+    reasons.push('override: life-threat keyword with 5+ people');
   }
 
   return { level, score, reasons };
