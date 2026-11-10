@@ -5,7 +5,7 @@ export default function SeverityBadge({ level = 'Low', score, size = 'md', upper
   const pad = size === 'sm' ? 'px-2 py-0.5 text-[11px]' : 'px-2.5 py-1 text-xs';
   return (
     <span
-      className={`inline-flex items-center gap-1.5 whitespace-nowrap rounded-full font-bold text-white ${pad} ${
+      className={`inline-flex items-center gap-1.5 whitespace-nowrap rounded font-black uppercase tracking-wide ${pad} ${
         SEVERITY_STYLES[level] || SEVERITY_STYLES.Low
       }`}
     >
@@ -16,7 +16,7 @@ export default function SeverityBadge({ level = 'Low', score, size = 'md', upper
         </span>
       )}
       {upper ? level.toUpperCase() : level}
-      {score !== undefined && score !== null && <span className="font-semibold opacity-90">· {score}</span>}
+      {score !== undefined && score !== null && <span className="font-bold opacity-90">· {score}</span>}
     </span>
   );
 }

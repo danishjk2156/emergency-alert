@@ -45,10 +45,24 @@ src/
 | `/` → `/report` | Report an emergency: category tiles, live severity preview, GPS, contact info |
 | `/report/success` | Reference code with Copy button, summary, "Why this severity?" |
 | `/track?ref=` | Status lookup by reference code |
-| `/admin/login` | Admin sign in |
+| `/login`, `/register` | Citizen sign in and sign up |
+| `/account` | My reports: the signed-in citizen's own reports with live progress |
+| `/admin/login` | Admin sign in (citizen accounts are refused) |
 | `/admin` | Dashboard: critical banner, stat cards, category bars, status/severity bars, latest 5; refreshes every 15s |
 | `/admin/incidents` | Search, filters and sort, all kept in the URL; status chips; ⋯ menu; pages of 10; cards on mobile |
 | `/admin/incidents/:id` | Detail: status update with note, severity override, timeline, contact, delete |
+
+## Accounts and anonymous reports
+
+- **One session for everyone.** Citizens and admins share one session, and the `role` decides access. `/admin` requires `role: "admin"`.
+- **How a report gets linked.** When a signed-in citizen reports, the token is sent and the server links the report to their account. The "Report anonymously" switch sends `anonymous: true` instead, and the server must not store the user's id.
+- **Signed-out reports** never send a token, so they are anonymous.
+- **Expired sessions.** If the token has expired, the app resubmits the report anonymously, so a report is never lost.
+- **Admins** see a Registered or Anonymous badge on every incident, and a "By reporter" bar on the dashboard.
+- **Current backend.** Until it adds the account endpoints, sign-up shows a clear "not enabled yet" message and every report is anonymous.
+- **Backend spec:** [`docs/server-auth-plan.md`](../docs/server-auth-plan.md).
+
+Citizen demo in mock mode: `priya@example.com / priya1234`.
 
 ## Manual test script
 

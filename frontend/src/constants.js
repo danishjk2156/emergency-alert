@@ -4,49 +4,48 @@ export const SEVERITIES = ['Low', 'Medium', 'High', 'Critical'];
 export const STATUSES = ['Reported', 'Pending', 'In Progress', 'Resolved'];
 
 export const SEVERITY_STYLES = {
-  Low: 'bg-green-600',
-  Medium: 'bg-amber-500',
-  High: 'bg-orange-600',
-  Critical: 'bg-red-600',
+  Low: 'bg-green-700 text-white',
+  Medium: 'bg-amber-400 text-ink',
+  High: 'bg-orange-700 text-white',
+  Critical: 'bg-brand text-white',
 };
 
-// Bars / dots that reuse the severity colors
+// Bars / dots that reuse the severity colours
 export const SEVERITY_BAR = {
-  Low: 'bg-green-600',
-  Medium: 'bg-amber-500',
-  High: 'bg-orange-600',
-  Critical: 'bg-red-600',
+  Low: 'bg-green-700',
+  Medium: 'bg-amber-400',
+  High: 'bg-orange-700',
+  Critical: 'bg-brand',
 };
 
 export const STATUS_STYLES = {
-  Reported: 'border-gray-600 text-gray-700',
-  Pending: 'border-amber-600 text-amber-700',
-  'In Progress': 'border-blue-600 text-blue-700',
-  Resolved: 'border-green-600 text-green-700',
+  Reported: 'border-gray-600 text-gray-800',
+  Pending: 'border-amber-600 text-amber-800',
+  'In Progress': 'border-blue-700 text-blue-800',
+  Resolved: 'border-green-700 text-green-800',
 };
 
 export const STATUS_BAR = {
-  Reported: 'bg-gray-400',
+  Reported: 'bg-gray-500',
   Pending: 'bg-amber-500',
-  'In Progress': 'bg-blue-600',
-  Resolved: 'bg-green-600',
+  'In Progress': 'bg-blue-700',
+  Resolved: 'bg-green-700',
 };
 
 // Used if GET /categories fails, and to resolve a bare category code.
 export const FALLBACK_CATEGORIES = [
-  { id: 1, code: 'FIRE', name: 'Fire Emergency', icon: '🔥', base_weight: 30 },
-  { id: 2, code: 'ROAD', name: 'Road Accident', icon: '🚗', base_weight: 20 },
-  { id: 3, code: 'MEDICAL', name: 'Medical Emergency', icon: '❤️', base_weight: 20 },
-  { id: 4, code: 'FLOOD', name: 'Flood', icon: '🌊', base_weight: 25 },
-  { id: 5, code: 'COLLAPSE', name: 'Building Collapse', icon: '🏢', base_weight: 35 },
-  { id: 6, code: 'OTHER', name: 'Other Emergencies', icon: '⚠️', base_weight: 10 },
+  { id: 1, code: 'FIRE', name: 'Fire Emergency', base_weight: 30 },
+  { id: 2, code: 'ROAD', name: 'Road Accident', base_weight: 20 },
+  { id: 3, code: 'MEDICAL', name: 'Medical Emergency', base_weight: 20 },
+  { id: 4, code: 'FLOOD', name: 'Flood', base_weight: 25 },
+  { id: 5, code: 'COLLAPSE', name: 'Building Collapse', base_weight: 35 },
+  { id: 6, code: 'OTHER', name: 'Other Emergencies', base_weight: 10 },
 ];
 
 export const categoryByCode = (code) =>
   FALLBACK_CATEGORIES.find((c) => c.code === String(code || '').toUpperCase()) || {
     code: code || 'OTHER',
     name: code || 'Other',
-    icon: '⚠️',
   };
 
 export const SAFETY_TIPS = {

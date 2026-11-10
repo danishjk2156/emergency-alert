@@ -7,6 +7,7 @@ export const USE_MOCK = import.meta.env.MODE === 'mock' || import.meta.env.VITE_
 
 export const TOKEN_KEY = 'resqnet_token';
 export const USER_KEY = 'resqnet_user';
+export const SESSION_EVENT = 'resqnet:session';
 
 export class ApiError extends Error {
   constructor(status, message) {
@@ -15,17 +16,57 @@ export class ApiError extends Error {
   }
 }
 
-export const getToken = () => localStorage.getItem(TOKEN_KEY);
+/* ---------------- session (one session for both citizens and admins; role decides access) ---------------- */
+
+export const getToken = () => {
+  try {
+    return localStorage.getItem(TOKEN_KEY);
+  } catch {
+    return null;
+  }
+};
+
+export function getStoredUser() {
+  try {
+    return JSON.parse(localStorage.getItem(USER_KEY) || 'null');
+  } catch {
+    return null;
+  }
+}
+
+function announce() {
+  window.dispatchEvent(new Event(SESSION_EVENT));
+}
+
+export function saveSession(token, user) {
+  try {
+    localStorage.setItem(TOKEN_KEY, token);
+    localStorage.setItem(USER_KEY, JSON.stringify(user));
+  } catch {
+    /* storage blocked: session lasts for this page only */
+  }
+  announce();
+}
 
 export function clearSession() {
-  localStorage.removeItem(TOKEN_KEY);
-  localStorage.removeItem(USER_KEY);
+  try {
+    localStorage.removeItem(TOKEN_KEY);
+    localStorage.removeItem(USER_KEY);
+  } catch {
+    /* ignore */
+  }
+  announce();
 }
+
+/** Accounts without a role (older backends) are treated as admins only if the backend says so. */
+export const isAdminUser = (u) => String(u?.role || '').toLowerCase() === 'admin';
+
+/* ---------------- request helper ---------------- */
 
 /** Turn FastAPI errors ({detail: "..."} or 422 {detail: [{loc, msg}]}) into one sentence. */
 function parseDetail(data, status) {
   const d = data && data.detail;
-  if (typeof d === 'string') return d;
+  if (typeof d === 'string' && d !== 'Not Found') return d;
   if (Array.isArray(d) && d.length) {
     return d
       .map((e) => {
@@ -37,6 +78,7 @@ function parseDetail(data, status) {
   }
   if (status === 404) return 'Not found.';
   if (status === 403) return 'You don’t have permission to do that.';
+  if (status === 409) return 'That already exists.';
   if (status >= 500) return 'The server had a problem. Please try again.';
   return `Request failed (${status}).`;
 }
@@ -50,54 +92,64 @@ function buildQuery(params = {}) {
   return s ? `?${s}` : '';
 }
 
+/**
+ * auth: 'required' → must send token; 401 ends the session and redirects to sign-in.
+ *       'optional' → send token if there is one; caller handles 401.
+ *       false      → never send a token.
+ */
 export async function request(path, { method = 'GET', body, auth = false, query } = {}) {
-  const url = `${path}${buildQuery(query)}`;
-  const token = getToken();
+  const token = auth ? getToken() : null;
+
+  let status;
+  let data = null;
 
   if (USE_MOCK) {
     const res = await mockRequest(method, path, body, query || {}, token);
-    if (res.status === 401 && auth) handleUnauthorized();
-    if (res.status >= 400) throw new ApiError(res.status, parseDetail(res.data, res.status));
-    return res.data;
-  }
-
-  const headers = { Accept: 'application/json' };
-  if (body !== undefined) headers['Content-Type'] = 'application/json';
-  if (auth && token) headers.Authorization = `Bearer ${token}`;
-
-  let res;
-  try {
-    res = await fetch(`${BASE_URL}${url}`, {
-      method,
-      headers,
-      body: body !== undefined ? JSON.stringify(body) : undefined,
-    });
-  } catch {
-    throw new ApiError(0, 'Cannot reach the server. Check your connection and try again.');
-  }
-
-  if (res.status === 204) return null;
-  let data = null;
-  const text = await res.text();
-  if (text) {
+    status = res.status;
+    data = res.data;
+  } else {
+    const headers = { Accept: 'application/json' };
+    if (body !== undefined) headers['Content-Type'] = 'application/json';
+    if (token) headers.Authorization = `Bearer ${token}`;
+    let res;
     try {
-      data = JSON.parse(text);
+      res = await fetch(`${BASE_URL}${path}${buildQuery(query)}`, {
+        method,
+        headers,
+        body: body !== undefined ? JSON.stringify(body) : undefined,
+      });
     } catch {
-      data = { detail: text };
+      throw new ApiError(0, 'Cannot reach the server. Check your connection and try again.');
+    }
+    status = res.status;
+    if (status !== 204) {
+      const text = await res.text();
+      if (text) {
+        try {
+          data = JSON.parse(text);
+        } catch {
+          data = { detail: text };
+        }
+      }
     }
   }
 
-  if (res.status === 401 && auth) handleUnauthorized();
-  if (!res.ok) throw new ApiError(res.status, parseDetail(data, res.status));
-  return data;
+  if (status === 401 && auth === 'required') handleUnauthorized();
+  if (status >= 400) throw new ApiError(status, parseDetail(data, status));
+  return status === 204 ? null : data;
 }
 
 function handleUnauthorized() {
   clearSession();
-  if (!window.location.pathname.startsWith('/admin/login')) {
-    window.location.href = '/admin/login?expired=1';
+  const path = window.location.pathname;
+  if (path.startsWith('/admin')) {
+    if (!path.startsWith('/admin/login')) window.location.href = '/admin/login?expired=1';
+  } else if (!path.startsWith('/login')) {
+    window.location.href = `/login?expired=1&next=${encodeURIComponent(path)}`;
   }
 }
+
+const notEnabled = (e) => e instanceof ApiError && (e.status === 404 || e.status === 405);
 
 /* ---------------- normalizers ---------------- */
 
@@ -116,8 +168,16 @@ function normCategory(c, code) {
   return categoryByCode(c || code);
 }
 
+function normReporter(raw) {
+  const r = raw.reporter;
+  if (r && typeof r === 'object') return { id: r.id ?? raw.reporter_id ?? null, name: r.name ?? null, email: r.email ?? null };
+  if (raw.reporter_id) return { id: raw.reporter_id, name: raw.reporter_name ?? null, email: raw.reporter_email ?? null };
+  return null;
+}
+
 export function normalizeIncident(raw) {
   if (!raw) return raw;
+  const reporter = normReporter(raw);
   return {
     ...raw,
     ref_code: raw.ref_code ?? raw.reference_no ?? raw.reference ?? `#${raw.id}`,
@@ -127,6 +187,9 @@ export function normalizeIncident(raw) {
     severity_score: Number(raw.severity_score ?? 0),
     severity_reasons: Array.isArray(raw.severity_reasons) ? raw.severity_reasons.map(normReason) : [],
     people_affected: Number(raw.people_affected ?? 0),
+    reporter,
+    // A report is anonymous unless the server linked it to an account.
+    is_anonymous: typeof raw.is_anonymous === 'boolean' ? raw.is_anonymous : !reporter,
     history: Array.isArray(raw.history)
       ? raw.history.map((h) => ({
           ...h,
@@ -139,7 +202,12 @@ export function normalizeIncident(raw) {
   };
 }
 
-/* ---------------- endpoints ---------------- */
+function normList(data) {
+  const items = Array.isArray(data) ? data : data.items ?? [];
+  return { items: items.map(normalizeIncident), total: Number(data.total ?? items.length) };
+}
+
+/* ---------------- public endpoints ---------------- */
 
 export async function getCategories() {
   try {
@@ -150,8 +218,26 @@ export async function getCategories() {
   }
 }
 
-export async function createIncident(body) {
-  return normalizeIncident(await request('/incidents', { method: 'POST', body }));
+/**
+ * Submit a report. Signed-in users send their token so the server links the
+ * report to their account; `anonymous: true` asks the server to ignore it.
+ * Returns { incident, anonymousFallback } — anonymousFallback is true when an
+ * expired session forced an anonymous resubmit (reports are never blocked).
+ */
+export async function createIncident(body, { anonymous = false } = {}) {
+  const signedIn = Boolean(getToken());
+  const payload = signedIn && anonymous ? { ...body, anonymous: true } : body;
+  try {
+    const data = await request('/incidents', { method: 'POST', body: payload, auth: signedIn && !anonymous ? 'optional' : false });
+    return { incident: normalizeIncident(data), anonymousFallback: false };
+  } catch (e) {
+    if (e.status === 401 && signedIn && !anonymous) {
+      clearSession();
+      const data = await request('/incidents', { method: 'POST', body, auth: false });
+      return { incident: normalizeIncident(data), anonymousFallback: true };
+    }
+    throw e;
+  }
 }
 
 export async function trackIncident(ref) {
@@ -159,43 +245,91 @@ export async function trackIncident(ref) {
   return { ...data, severity: normSeverity(data.severity), status: normStatus(data.status) };
 }
 
-export async function login(email, password) {
-  const data = await request('/auth/login', { method: 'POST', body: { email, password } });
+/* ---------------- accounts ---------------- */
+
+function takeSession(data, fallbackUser) {
   const token = data.token ?? data.access_token;
-  if (!token) throw new ApiError(500, 'Login response had no token.');
-  const user = data.user ?? { email };
-  localStorage.setItem(TOKEN_KEY, token);
-  localStorage.setItem(USER_KEY, JSON.stringify(user));
+  if (!token) throw new ApiError(500, 'Sign-in response had no token.');
+  const user = { role: 'user', ...(fallbackUser || {}), ...(data.user || {}) };
+  saveSession(token, user);
   return user;
 }
 
+export async function login(email, password) {
+  const data = await request('/auth/login', { method: 'POST', body: { email, password } });
+  return takeSession(data, { email });
+}
+
+export async function register({ name, email, password, phone }) {
+  try {
+    const body = { name, email, password };
+    if (phone) body.phone = phone;
+    const data = await request('/auth/register', { method: 'POST', body });
+    return takeSession(data, { name, email, role: 'user' });
+  } catch (e) {
+    if (notEnabled(e)) throw new ApiError(e.status, 'Account sign-up isn’t enabled on the server yet. You can still report anonymously.');
+    if (e.status === 409) throw new ApiError(409, 'An account with this email already exists. Try signing in.');
+    throw e;
+  }
+}
+
+/** Validates the stored token. Returns the user, or null if the server has no /auth/me yet. */
+export async function getMe() {
+  try {
+    const user = await request('/auth/me', { auth: 'optional' });
+    return user;
+  } catch (e) {
+    if (notEnabled(e)) return null;
+    throw e;
+  }
+}
+
+export async function logout() {
+  try {
+    await request('/auth/logout', { method: 'POST', auth: 'optional' });
+  } catch {
+    /* server may not support logout; the local session is cleared either way */
+  }
+  clearSession();
+}
+
+/** The signed-in citizen's own reports. */
+export async function listMyIncidents(params = {}) {
+  try {
+    return normList(await request('/me/incidents', { auth: 'required', query: params }));
+  } catch (e) {
+    if (notEnabled(e)) throw new ApiError(e.status, '“My reports” isn’t enabled on the server yet. Use Track with your reference code.');
+    throw e;
+  }
+}
+
+/* ---------------- admin endpoints ---------------- */
+
 /** params: {status, severity, category, q, sort, limit, offset} → {items, total} */
 export async function listIncidents(params = {}) {
-  const data = await request('/incidents', { auth: true, query: params });
-  const items = Array.isArray(data) ? data : data.items ?? [];
-  return { items: items.map(normalizeIncident), total: Number(data.total ?? items.length) };
+  return normList(await request('/incidents', { auth: 'required', query: params }));
 }
 
 export async function getIncident(id) {
-  return normalizeIncident(await request(`/incidents/${id}`, { auth: true }));
+  return normalizeIncident(await request(`/incidents/${id}`, { auth: 'required' }));
 }
 
 export async function updateStatus(id, status, note) {
   const body = { status };
   if (note && note.trim()) body.note = note.trim();
-  return normalizeIncident(await request(`/incidents/${id}/status`, { method: 'PATCH', auth: true, body }));
+  return normalizeIncident(await request(`/incidents/${id}/status`, { method: 'PATCH', auth: 'required', body }));
 }
 
 export async function updateSeverity(id, severity) {
-  return normalizeIncident(await request(`/incidents/${id}/severity`, { method: 'PATCH', auth: true, body: { severity } }));
+  return normalizeIncident(await request(`/incidents/${id}/severity`, { method: 'PATCH', auth: 'required', body: { severity } }));
 }
 
 export async function deleteIncident(id) {
-  await request(`/incidents/${id}`, { method: 'DELETE', auth: true });
+  await request(`/incidents/${id}`, { method: 'DELETE', auth: 'required' });
 }
 
 export async function getStats() {
-  const s = await request('/dashboard/stats', { auth: true });
+  const s = await request('/dashboard/stats', { auth: 'required' });
   const byStatus = {};
   for (const [k, v] of Object.entries(s.by_status || {})) byStatus[normStatus(k)] = (byStatus[normStatus(k)] || 0) + Number(v);
   const bySeverity = {};
@@ -209,6 +343,8 @@ export async function getStats() {
     critical_active: Number(s.critical_active ?? 0),
     pending: Number(s.pending ?? 0),
     resolved: Number(s.resolved ?? 0),
+    anonymous: s.anonymous ?? s.by_reporter?.anonymous ?? null,
+    registered: s.registered ?? s.by_reporter?.registered ?? null,
     by_status: byStatus,
     by_severity: bySeverity,
     by_category: byCategory.map((c) => ({ ...categoryByCode(c.code), ...c, count: Number(c.count ?? 0) })),

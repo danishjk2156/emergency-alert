@@ -3,7 +3,9 @@ import { useSearchParams } from 'react-router-dom';
 import { deleteIncident, getCategories, getStats, listIncidents, updateStatus } from '../api';
 import ConfirmDialog from '../components/ConfirmDialog';
 import EmptyState, { ErrorState } from '../components/EmptyState';
+import Icon from '../components/Icon';
 import IncidentTable from '../components/IncidentTable';
+import SectionTitle from '../components/SectionTitle';
 import { useToast } from '../components/Toast';
 import { FALLBACK_CATEGORIES, SEVERITIES, STATUSES } from '../constants';
 
@@ -121,19 +123,23 @@ export default function IncidentsPage() {
   const pages = Math.max(1, Math.ceil(data.total / PAGE_SIZE));
   const chipCls = (on) =>
     `inline-flex min-h-[36px] items-center gap-1.5 rounded-full border px-3 text-sm font-semibold transition-colors ${
-      on ? 'border-navy bg-navy text-white' : 'border-slate-300 bg-white text-slate-700 hover:border-slate-500'
+      on ? 'border-charcoal bg-charcoal text-white' : 'border-field/50 bg-white text-ink hover:border-ink'
     }`;
   const allCount = stats ? Object.values(stats.by_status).reduce((a, b) => a + b, 0) || stats.total : null;
 
   return (
     <div className="space-y-4">
-      <div>
-        <h1 className="text-2xl font-extrabold">All Incidents</h1>
-        <p className="text-sm text-slate-500">
-          {loading && !data.total ? 'Loading…' : `${data.total} incident${data.total === 1 ? '' : 's'}${filtered ? ' match your filters' : ''}`}
-          {sort === 'priority' && ' · critical & unresolved first'}
-        </p>
-      </div>
+      <SectionTitle
+        as="h1"
+        sub={
+          <>
+            {loading && !data.total ? 'Loading…' : `${data.total} incident${data.total === 1 ? '' : 's'}${filtered ? ' match your filters' : ''}`}
+            {sort === 'priority' && ' · critical & unresolved first'}
+          </>
+        }
+      >
+        All incidents
+      </SectionTitle>
 
       <div className="card flex flex-col gap-3 p-3 sm:p-4">
         <div className="grid gap-2 sm:grid-cols-2 lg:grid-cols-[minmax(220px,2fr)_repeat(4,minmax(0,1fr))]">
@@ -141,13 +147,11 @@ export default function IncidentsPage() {
             <label htmlFor="search" className="sr-only">
               Search incidents
             </label>
-            <span className="pointer-events-none absolute left-3 top-1/2 -translate-y-1/2 text-sm" aria-hidden="true">
-              🔍
-            </span>
+            <Icon name="search" className="pointer-events-none absolute left-3.5 top-1/2 h-[18px] w-[18px] -translate-y-1/2 text-ink-3" />
             <input
               id="search"
               type="search"
-              className="input pl-9"
+              className="input pl-10"
               placeholder="Search title, description, location…"
               value={search}
               onChange={(e) => setSearch(e.target.value)}
@@ -173,7 +177,7 @@ export default function IncidentsPage() {
             <option value="">All categories</option>
             {categories.map((c) => (
               <option key={c.code} value={c.code}>
-                {c.icon} {c.name}
+                {c.name}
               </option>
             ))}
           </select>
@@ -198,7 +202,7 @@ export default function IncidentsPage() {
           {filtered && (
             <button
               type="button"
-              className="ml-auto min-h-[36px] text-sm font-semibold text-blue-700 hover:underline"
+              className="ml-auto inline-flex min-h-[36px] items-center gap-1 text-sm font-bold text-brand hover:underline"
               onClick={() => {
                 setSearch('');
                 setParams(sort !== 'priority' ? { sort } : {}, { replace: true });
@@ -214,32 +218,32 @@ export default function IncidentsPage() {
         <ErrorState message={error} onRetry={load} />
       ) : !loading && data.items.length === 0 ? (
         <EmptyState
-          icon={filtered ? '🔎' : '🎉'}
+          icon={filtered ? 'search' : 'inbox'}
           title={filtered ? 'No incidents match' : 'No incidents yet'}
           message={filtered ? 'Try a different search or clear the filters.' : 'New public reports will appear here.'}
         />
       ) : (
-        <div className="card overflow-visible p-0 md:p-1">
-          <div className="p-2 md:p-0">
+        <div className="card overflow-visible p-0">
+          <div className="p-2.5 md:p-0">
             <IncidentTable items={data.items} loading={loading && data.items.length === 0} onStatus={onStatus} onDelete={setToDelete} />
           </div>
         </div>
       )}
 
       {data.total > 0 && !error && (
-        <nav aria-label="Pagination" className="flex flex-wrap items-center justify-between gap-3 text-sm text-slate-600">
+        <nav aria-label="Pagination" className="flex flex-wrap items-center justify-between gap-3 text-sm text-ink-2">
           <p className="tabular-nums">
             {from}–{to} of {data.total}
           </p>
           <div className="flex items-center gap-2">
             <button type="button" className="btn" disabled={page <= 1 || loading} onClick={() => setParam({ page: page - 1 }, { keepPage: true })}>
-              ‹ Prev
+              <Icon name="chevron-left" className="h-4 w-4" /> Prev
             </button>
             <span className="tabular-nums">
               Page {page} of {pages}
             </span>
             <button type="button" className="btn" disabled={page >= pages || loading} onClick={() => setParam({ page: page + 1 }, { keepPage: true })}>
-              Next ›
+              Next <Icon name="chevron-right" className="h-4 w-4" />
             </button>
           </div>
         </nav>
@@ -250,7 +254,7 @@ export default function IncidentsPage() {
         title="Delete this incident?"
         message={
           <>
-            <strong className="text-slate-900">{toDelete?.ref_code}</strong> · {toDelete?.title}
+            <strong className="text-ink">{toDelete?.ref_code}</strong> · {toDelete?.title}
             <br />
             This permanently removes it and its history. This can’t be undone.
           </>

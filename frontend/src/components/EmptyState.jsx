@@ -1,23 +1,26 @@
-export default function EmptyState({ icon = '📭', title, message, action }) {
+import Icon from './Icon';
+
+export default function EmptyState({ icon = 'inbox', title, message, action }) {
   return (
-    <div className="rounded-xl border-2 border-dashed border-slate-300 bg-white px-6 py-12 text-center">
-      <div className="text-3xl" aria-hidden="true">
-        {icon}
-      </div>
-      <p className="mt-2 font-semibold text-slate-800">{title}</p>
-      {message && <p className="mx-auto mt-1 max-w-sm text-sm text-slate-500">{message}</p>}
-      {action && <div className="mt-4">{action}</div>}
+    <div className="animate-fade-up rounded-md border-2 border-dashed border-field/40 bg-white px-6 py-14 text-center">
+      <span className="mx-auto grid h-14 w-14 place-items-center rounded-full bg-brand-soft text-brand">
+        <Icon name={icon} className="h-7 w-7" />
+      </span>
+      <p className="mt-3 text-base font-black uppercase tracking-wide text-ink">{title}</p>
+      {message && <p className="mx-auto mt-1 max-w-sm text-sm text-ink-3">{message}</p>}
+      {action && <div className="mt-5">{action}</div>}
     </div>
   );
 }
 
 export function ErrorState({ message, onRetry }) {
   return (
-    <div role="alert" className="flex flex-wrap items-center gap-3 rounded-xl border border-red-200 bg-red-50 px-4 py-3 text-sm">
-      <span className="font-medium text-red-700">⚠ {message}</span>
+    <div role="alert" className="flex animate-fade-up flex-wrap items-center gap-3 rounded-md border-l-4 border-brand bg-brand-soft px-4 py-3 text-sm">
+      <Icon name="alert" className="h-5 w-5 text-brand-dark" />
+      <span className="font-semibold text-brand-deep">{message}</span>
       {onRetry && (
         <button type="button" onClick={onRetry} className="btn ml-auto">
-          Try again
+          <Icon name="refresh" className="h-4 w-4" /> Try again
         </button>
       )}
     </div>

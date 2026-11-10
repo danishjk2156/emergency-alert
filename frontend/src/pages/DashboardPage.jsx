@@ -3,7 +3,9 @@ import { Link } from 'react-router-dom';
 import { getStats, listIncidents } from '../api';
 import CriticalBanner from '../components/CriticalBanner';
 import { ErrorState } from '../components/EmptyState';
+import Icon, { CategoryIcon } from '../components/Icon';
 import IncidentTable from '../components/IncidentTable';
+import SectionTitle from '../components/SectionTitle';
 import Spinner from '../components/Spinner';
 import StatCard from '../components/StatCard';
 import { FALLBACK_CATEGORIES, SEVERITIES, SEVERITY_BAR, STATUSES, STATUS_BAR, formatTime } from '../constants';
@@ -14,22 +16,20 @@ function StackedBar({ title, keys, counts, colors }) {
   const total = keys.reduce((s, k) => s + (counts[k] || 0), 0);
   return (
     <div>
-      <h3 className="mb-2 text-xs font-bold uppercase tracking-wide text-slate-500">{title}</h3>
-      <div
-        className="flex h-4 overflow-hidden rounded-md bg-slate-100"
-        role="img"
-        aria-label={`${title}: ${keys.map((k) => `${k} ${counts[k] || 0}`).join(', ')}`}
-      >
+      <h3 className="mb-2 text-[11px] font-black uppercase tracking-[0.12em] text-ink-3">{title}</h3>
+      <div className="flex h-4 overflow-hidden rounded bg-black/10" role="img" aria-label={`${title}: ${keys.map((k) => `${k} ${counts[k] || 0}`).join(', ')}`}>
         {total > 0 &&
           keys.map((k) =>
-            counts[k] ? <div key={k} className={colors[k]} style={{ width: `${(counts[k] / total) * 100}%` }} title={`${k}: ${counts[k]}`} /> : null,
+            counts[k] ? (
+              <div key={k} className={`${colors[k]} transition-all duration-700 ease-out`} style={{ width: `${(counts[k] / total) * 100}%` }} title={`${k}: ${counts[k]}`} />
+            ) : null,
           )}
       </div>
-      <ul className="mt-2 flex flex-wrap gap-x-4 gap-y-1 text-xs text-slate-600">
+      <ul className="mt-2.5 flex flex-wrap gap-x-4 gap-y-1 text-xs text-ink-2">
         {keys.map((k) => (
           <li key={k} className="inline-flex items-center gap-1.5">
             <span className={`h-2.5 w-2.5 rounded-sm ${colors[k]}`} aria-hidden="true" />
-            {k} <strong className="tabular-nums text-slate-900">{counts[k] || 0}</strong>
+            {k} <strong className="tabular-nums text-ink">{counts[k] || 0}</strong>
           </li>
         ))}
       </ul>
@@ -38,7 +38,6 @@ function StackedBar({ title, keys, counts, colors }) {
 }
 
 function CategoryBars({ data }) {
-  // Always show all 6 categories, even with 0
   const rows = FALLBACK_CATEGORIES.map((c) => {
     const hit = data.find((d) => d.code === c.code);
     return { ...c, ...(hit || {}), count: hit ? hit.count : 0 };
@@ -47,20 +46,18 @@ function CategoryBars({ data }) {
   const all = [...rows, ...extra];
   const max = Math.max(1, ...all.map((r) => r.count));
   return (
-    <ul className="space-y-2.5">
+    <ul className="stagger space-y-2">
       {all.map((r) => (
         <li key={r.code}>
-          <Link
-            to={`/admin/incidents?category=${encodeURIComponent(r.code)}`}
-            className="flex min-h-[32px] items-center gap-3 rounded-md px-1 text-sm hover:bg-slate-50"
-          >
-            <span className="w-40 shrink-0 truncate text-slate-700">
-              <span aria-hidden="true">{r.icon}</span> {r.name}
+          <Link to={`/admin/incidents?category=${encodeURIComponent(r.code)}`} className="group flex min-h-[38px] items-center gap-3 rounded px-1 text-sm transition-colors hover:bg-paper">
+            <span className="grid h-8 w-8 shrink-0 place-items-center rounded-full bg-brand-soft text-brand transition-transform duration-300 group-hover:scale-110">
+              <CategoryIcon code={r.code} className="h-4 w-4" />
             </span>
-            <span className="h-3.5 flex-1 overflow-hidden rounded bg-slate-100">
-              <span className="block h-full rounded bg-slate-500 transition-all duration-500" style={{ width: `${(r.count / max) * 100}%` }} />
+            <span className="w-36 shrink-0 truncate font-semibold text-ink-2">{r.name}</span>
+            <span className="h-3 flex-1 overflow-hidden rounded bg-black/[0.07]">
+              <span className="block h-full rounded bg-charcoal transition-all duration-700 ease-out group-hover:bg-brand" style={{ width: `${(r.count / max) * 100}%` }} />
             </span>
-            <strong className="w-8 text-right tabular-nums">{r.count}</strong>
+            <strong className="w-8 text-right tabular-nums text-ink">{r.count}</strong>
           </Link>
         </li>
       ))}
@@ -107,19 +104,28 @@ export default function DashboardPage() {
   }, [load]);
 
   const resolvedPct = stats?.total ? Math.round((stats.resolved / stats.total) * 100) : 0;
+  const hasReporterSplit = stats && stats.anonymous != null && stats.registered != null;
 
   return (
-    <div className="space-y-4">
-      <div className="flex flex-wrap items-start justify-between gap-3">
-        <div>
-          <h1 className="text-2xl font-extrabold">Emergency Dashboard</h1>
-          <p className="text-sm text-slate-500">
-            Live overview · auto-refresh every 15s
-            {updatedAt && <span className="hidden sm:inline"> · updated {formatTime(updatedAt)}</span>}
-          </p>
-        </div>
+    <div className="space-y-6">
+      <div className="flex flex-wrap items-end justify-between gap-3">
+        <SectionTitle
+          as="h1"
+          sub={
+            <span className="inline-flex items-center gap-2">
+              <span className="relative flex h-2 w-2" aria-hidden="true">
+                <span className="absolute inline-flex h-full w-full animate-ping rounded-full bg-green-600 opacity-75" />
+                <span className="relative inline-flex h-2 w-2 rounded-full bg-green-700" />
+              </span>
+              Live overview · auto-refresh every 15s
+              {updatedAt && <span className="hidden sm:inline"> · updated {formatTime(updatedAt)}</span>}
+            </span>
+          }
+        >
+          Emergency dashboard
+        </SectionTitle>
         <button type="button" onClick={() => load(true)} disabled={refreshing} className="btn">
-          {refreshing ? <Spinner /> : <span aria-hidden="true">⟳</span>} Refresh
+          {refreshing ? <Spinner /> : <Icon name="refresh" className="h-4 w-4" />} Refresh
         </button>
       </div>
 
@@ -127,20 +133,21 @@ export default function DashboardPage() {
 
       {stats && <CriticalBanner count={stats.critical_active} items={stats.recent_critical} />}
 
-      <div className="grid grid-cols-2 gap-3 lg:grid-cols-4">
-        <StatCard label="Total Reported" value={stats?.total ?? 0} loading={loading} sub="all time" />
-        <StatCard label="Critical" value={stats?.critical ?? 0} tone="critical" loading={loading} sub={`${stats?.critical_active ?? 0} active`} />
-        <StatCard label="Pending" value={stats?.pending ?? 0} tone="amber" loading={loading} sub="not resolved" />
-        <StatCard label="Resolved" value={stats?.resolved ?? 0} tone="green" loading={loading} sub={`${resolvedPct}% of total`} />
+      <div className="stagger grid grid-cols-2 gap-3 sm:gap-4 lg:grid-cols-4">
+        <StatCard label="Total reported" value={stats?.total ?? 0} loading={loading} icon="inbox" sub="all time" />
+        <StatCard label="Critical" value={stats?.critical ?? 0} tone="critical" icon="siren" loading={loading} sub={`${stats?.critical_active ?? 0} active`} />
+        <StatCard label="Pending" value={stats?.pending ?? 0} tone="amber" icon="clock" loading={loading} sub="not resolved" />
+        <StatCard label="Resolved" value={stats?.resolved ?? 0} tone="green" icon="check-circle" loading={loading} sub={`${resolvedPct}% of total`} />
       </div>
 
       <div className="grid gap-4 lg:grid-cols-[minmax(0,1.3fr)_minmax(0,1fr)]">
         <section className="card p-5">
-          <h2 className="mb-4 font-bold">Incidents by Category</h2>
+          <h2 className="text-[13px] font-black uppercase tracking-wide text-ink">Incidents by category</h2>
+          <span className="title-bar mb-4" aria-hidden="true" />
           {loading ? (
             <div className="space-y-3">
               {FALLBACK_CATEGORIES.map((c) => (
-                <div key={c.code} className="skeleton h-4" />
+                <div key={c.code} className="skeleton h-6" />
               ))}
             </div>
           ) : (
@@ -149,7 +156,10 @@ export default function DashboardPage() {
         </section>
 
         <section className="card space-y-6 p-5">
-          <h2 className="font-bold">By Status &amp; Severity</h2>
+          <div>
+            <h2 className="text-[13px] font-black uppercase tracking-wide text-ink">Status &amp; severity</h2>
+            <span className="title-bar" aria-hidden="true" />
+          </div>
           {loading ? (
             <>
               <div className="skeleton h-10" />
@@ -159,20 +169,31 @@ export default function DashboardPage() {
             <>
               <StackedBar title="By status" keys={STATUSES} counts={stats?.by_status || {}} colors={STATUS_BAR} />
               <StackedBar title="By severity" keys={SEVERITIES} counts={stats?.by_severity || {}} colors={SEVERITY_BAR} />
+              {hasReporterSplit && (
+                <StackedBar
+                  title="By reporter"
+                  keys={['Registered', 'Anonymous']}
+                  counts={{ Registered: stats.registered, Anonymous: stats.anonymous }}
+                  colors={{ Registered: 'bg-charcoal', Anonymous: 'bg-gray-400' }}
+                />
+              )}
             </>
           )}
         </section>
       </div>
 
       <section className="card p-5">
-        <div className="mb-3 flex items-center justify-between">
-          <h2 className="font-bold">Latest incidents</h2>
-          <Link to="/admin/incidents?sort=newest" className="text-sm font-semibold text-blue-700 hover:underline">
-            View all →
+        <div className="mb-4 flex items-end justify-between">
+          <div>
+            <h2 className="text-[13px] font-black uppercase tracking-wide text-ink">Latest incidents</h2>
+            <span className="title-bar" aria-hidden="true" />
+          </div>
+          <Link to="/admin/incidents?sort=newest" className="inline-flex items-center gap-1 text-sm font-bold text-brand hover:underline">
+            View all <Icon name="arrow-right" className="h-4 w-4" />
           </Link>
         </div>
         {!loading && latest.length === 0 ? (
-          <p className="py-10 text-center text-sm text-slate-500">No incidents yet 🎉</p>
+          <p className="py-10 text-center text-sm text-ink-3">No incidents yet.</p>
         ) : (
           <IncidentTable items={latest} loading={loading} compact />
         )}
