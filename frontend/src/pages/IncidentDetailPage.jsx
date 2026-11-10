@@ -1,6 +1,12 @@
 import { useCallback, useEffect, useState } from 'react';
 import { Link, useNavigate, useParams } from 'react-router-dom';
-import { deleteIncident, getIncident, updateSeverity, updateStatus } from '../api';
+import { deleteIncident, getIncident, updateSeverity, updateStatus, verifyIncident } from '../api';
+import ClusterPill from '../components/ClusterPill';
+import LlmInsight from '../components/LlmInsight';
+import LocationInfo from '../components/LocationInfo';
+import RelatedReports from '../components/RelatedReports';
+import TrustMeter from '../components/TrustMeter';
+import VerificationBadge from '../components/VerificationBadge';
 import ConfirmDialog from '../components/ConfirmDialog';
 import EmptyState, { ErrorState } from '../components/EmptyState';
 import Icon, { CategoryIcon } from '../components/Icon';
@@ -49,6 +55,12 @@ export default function IncidentDetailPage() {
   const [savingSeverity, setSavingSeverity] = useState(false);
   const [confirmOpen, setConfirmOpen] = useState(false);
   const [deleting, setDeleting] = useState(false);
+  // Trust layer
+  const [verifyOpen, setVerifyOpen] = useState(null); // 'Verified' | 'False Alarm' | null
+  const [verifyNote, setVerifyNote] = useState('');
+  const [verifying, setVerifying] = useState(false);
+  const [aiPolling, setAiPolling] = useState(false);
+  const [relatedKey, setRelatedKey] = useState(0);
 
   const load = useCallback(async () => {
     setError('');
@@ -69,6 +81,51 @@ export default function IncidentDetailPage() {
     setLoading(true);
     load();
   }, [load]);
+
+  const aiPending = incident?.llm_assessment === null;
+  useEffect(() => {
+    if (!aiPending) {
+      setAiPolling(false);
+      return undefined;
+    }
+    setAiPolling(true);
+    const started = Date.now();
+    const t = setInterval(async () => {
+      if (Date.now() - started > 30000) {
+        clearInterval(t);
+        setAiPolling(false);
+        return;
+      }
+      try {
+        const fresh = await getIncident(id);
+        if (fresh.llm_assessment !== null) {
+          setIncident(fresh);
+          clearInterval(t);
+          setAiPolling(false);
+        }
+      } catch {
+        /* keep polling until the time limit */
+      }
+    }, 3000);
+    return () => clearInterval(t);
+  }, [aiPending, id]);
+
+  async function doVerify() {
+    if (!verifyOpen) return;
+    setVerifying(true);
+    try {
+      await verifyIncident(incident.id, { verification_status: verifyOpen, note: verifyNote });
+      toast(verifyOpen === 'Verified' ? 'Marked as verified' : 'Marked as false alarm');
+      setVerifyOpen(null);
+      setVerifyNote('');
+      setRelatedKey((k) => k + 1);
+      await load();
+    } catch (e) {
+      toast(e.message || 'Could not update verification', 'error');
+    } finally {
+      setVerifying(false);
+    }
+  }
 
   async function saveStatus() {
     setSavingStatus(true);
@@ -164,6 +221,8 @@ export default function IncidentDetailPage() {
               <div className="flex flex-wrap items-center gap-2">
                 <SeverityBadge level={incident.severity} score={incident.severity_score} upper />
                 <StatusChip status={incident.status} />
+                {incident.has_trust && <VerificationBadge status={incident.verification_status} size="sm" />}
+                <ClusterPill size={incident.cluster_size} />
                 <ReporterBadge incident={incident} size="sm" />
                 {incident.severity_overridden && (
                   <span className="rounded bg-charcoal px-2 py-0.5 text-[11px] font-black uppercase tracking-wide text-white">Overridden by admin</span>
@@ -179,8 +238,13 @@ export default function IncidentDetailPage() {
                   <Icon name="pin" className="h-4 w-4" /> {incident.location}
                 </span>
                 <span className="inline-flex items-center gap-1.5">
-                  <Icon name="users" className="h-4 w-4" /> {incident.people_affected} people
+                  <Icon name="users" className="h-4 w-4" /> {incident.people_affected} {incident.people_affected === 1 ? 'person' : 'people'}
                 </span>
+                {incident.cluster_people_affected != null && incident.cluster_people_affected !== incident.people_affected && (
+                  <span className="inline-flex items-center gap-1.5 font-bold text-indigo-800">
+                    <Icon name="layers" className="h-4 w-4" /> Cluster estimate: {incident.cluster_people_affected} people
+                  </span>
+                )}
                 <span className="inline-flex items-center gap-1.5">
                   <Icon name="clock" className="h-4 w-4" /> {formatDateTime(incident.created_at)}
                 </span>
@@ -191,13 +255,33 @@ export default function IncidentDetailPage() {
             <Icon name="trash" className="h-4 w-4" /> Delete
           </button>
         </div>
+        {incident.has_trust && incident.trust_score != null && (
+          <div className="flex flex-wrap items-center gap-3 border-t border-black/10 bg-white/60 px-5 py-3 sm:px-6">
+            <span className="text-[11px] font-black uppercase tracking-[0.12em] text-ink-3">Trust</span>
+            <TrustMeter score={incident.trust_score} />
+            <span className="text-xs text-ink-3">Shown next to severity — it never lowers priority.</span>
+          </div>
+        )}
       </header>
+
+      {incident.duplicate_of && (
+        <div role="note" className="flex animate-fade-up flex-wrap items-center gap-2 rounded-md border-l-4 border-gray-500 bg-white px-4 py-3 text-sm shadow-card">
+          <Icon name="copy" className="h-4 w-4 text-ink-3" />
+          <span className="font-semibold text-ink-2">Possible duplicate of</span>
+          <Link to={`/admin/incidents/${incident.duplicate_of}`} className="font-mono font-bold text-brand hover:underline">
+            {incident.duplicate_of_ref || `#${incident.duplicate_of}`}
+          </Link>
+        </div>
+      )}
 
       <div className="grid gap-5 lg:grid-cols-[minmax(0,1.4fr)_minmax(0,1fr)]">
         <div className="stagger min-w-0 space-y-5">
           <Panel title="Description" icon="note">
             <p className="whitespace-pre-wrap text-[15px] leading-relaxed text-ink-2">{incident.description}</p>
           </Panel>
+
+          <LlmInsight assessment={incident.llm_assessment} polling={aiPolling} currentCategory={incident.category?.code} />
+          {incident.has_trust && <RelatedReports id={incident.id} refreshKey={relatedKey} />}
 
           <Panel title="Why this severity?" icon="radar">
             <ReasonChips reasons={incident.severity_reasons} />
@@ -274,6 +358,38 @@ export default function IncidentDetailPage() {
         </div>
 
         <div className="stagger min-w-0 space-y-5">
+          {incident.has_trust && (
+            <Panel title="Verification" icon="shield">
+              <div className="mb-4 flex flex-wrap items-center gap-2">
+                <VerificationBadge status={incident.verification_status} />
+                {incident.trust_score != null && <TrustMeter score={incident.trust_score} />}
+              </div>
+              <p className="mb-2 text-[11px] font-black uppercase tracking-wider text-ink-3">Why this trust score</p>
+              <ReasonChips reasons={incident.trust_reasons} signed empty="No trust signals recorded." />
+              <div className="mt-4 border-t border-black/10 pt-4">
+                <LocationInfo source={incident.location_source} accuracy={incident.location_accuracy_m} mismatchKm={incident.location_mismatch_km} />
+              </div>
+              <div className="mt-5 grid grid-cols-2 gap-2">
+                <button
+                  type="button"
+                  className="btn border-green-700 bg-green-700 text-white hover:border-green-800 hover:bg-green-800"
+                  disabled={incident.verification_status === 'Verified'}
+                  onClick={() => setVerifyOpen('Verified')}
+                >
+                  <Icon name="check" className="h-4 w-4" strokeWidth={3} /> Mark verified
+                </button>
+                <button
+                  type="button"
+                  className="btn border-gray-400 bg-gray-100 text-gray-800 hover:bg-gray-200"
+                  disabled={incident.verification_status === 'False Alarm'}
+                  onClick={() => setVerifyOpen('False Alarm')}
+                >
+                  <Icon name="x" className="h-4 w-4" strokeWidth={3} /> False alarm
+                </button>
+              </div>
+            </Panel>
+          )}
+
           <Panel title="Update status" icon="refresh">
             <div role="radiogroup" aria-label="New status" className="grid grid-cols-2 gap-2">
               {STATUSES.map((s) => {
@@ -318,6 +434,43 @@ export default function IncidentDetailPage() {
           </Panel>
         </div>
       </div>
+
+      <ConfirmDialog
+        open={Boolean(verifyOpen)}
+        icon={verifyOpen === 'Verified' ? 'check-circle' : 'thumbs-down'}
+        title={verifyOpen === 'Verified' ? 'Mark as verified?' : 'Mark as false alarm?'}
+        confirmLabel={verifyOpen === 'Verified' ? 'Mark verified' : 'Mark false alarm'}
+        confirmClass={verifyOpen === 'Verified' ? 'border-green-700 bg-green-700 text-white hover:bg-green-800' : 'btn-dark'}
+        busy={verifying}
+        onConfirm={doVerify}
+        onCancel={() => {
+          setVerifyOpen(null);
+          setVerifyNote('');
+        }}
+        message={
+          <div className="space-y-3">
+            <p>
+              {verifyOpen === 'Verified'
+                ? 'Confirms this report is genuine and raises this device’s reputation.'
+                : 'This lowers this device’s reputation and removes it from its cluster.'}
+            </p>
+            <div>
+              <label htmlFor="verify-note" className="label">
+                Note <span className="font-medium normal-case tracking-normal text-ink-3">(optional)</span>
+              </label>
+              <textarea
+                id="verify-note"
+                rows={2}
+                maxLength={300}
+                className="input"
+                value={verifyNote}
+                onChange={(e) => setVerifyNote(e.target.value)}
+                placeholder={verifyOpen === 'Verified' ? 'e.g. Confirmed by fire unit on site' : 'e.g. Caller confirmed it was a drill'}
+              />
+            </div>
+          </div>
+        }
+      />
 
       <ConfirmDialog
         open={confirmOpen}

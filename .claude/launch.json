@@ -1,0 +1,23 @@
+{
+  "version": "0.0.1",
+  "configurations": [
+    {
+      "name": "backend",
+      "runtimeExecutable": "C:/Users/Danish/AppData/Local/Temp/claude/168a26f3a877f36b/ce8d3df3-1655-48a0-8496-2d07609e25ef/scratchpad/venv/Scripts/python.exe",
+      "runtimeArgs": ["-m", "uvicorn", "app.main:app", "--app-dir", "backend", "--port", "8000"],
+      "port": 8000
+    },
+    {
+      "name": "frontend",
+      "runtimeExecutable": "npm",
+      "runtimeArgs": ["--prefix", "frontend", "run", "dev", "--", "--strictPort"],
+      "port": 5173
+    },
+    {
+      "name": "frontend-mock",
+      "runtimeExecutable": "npm",
+      "runtimeArgs": ["--prefix", "frontend", "run", "dev:mock", "--", "--strictPort"],
+      "port": 5173
+    }
+  ]
+}

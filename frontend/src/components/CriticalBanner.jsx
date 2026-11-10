@@ -1,7 +1,7 @@
 import { Link } from 'react-router-dom';
 import Icon from './Icon';
 
-export default function CriticalBanner({ count, items = [] }) {
+export default function CriticalBanner({ count, items = [], breakdown }) {
   if (!count) return null;
   const titles = items.slice(0, 3).map((i) => `${i.title}${i.location ? ` – ${String(i.location).split(',')[0]}` : ''}`);
   return (
@@ -12,6 +12,7 @@ export default function CriticalBanner({ count, items = [] }) {
       </span>
       <strong className="font-black uppercase tracking-wide">
         {count} active critical incident{count === 1 ? '' : 's'}
+        {breakdown && <span className="font-bold normal-case tracking-normal text-white/90"> ({breakdown})</span>}
       </strong>
       {titles.length > 0 && (
         <span className="min-w-0 flex-1 truncate text-white/90">

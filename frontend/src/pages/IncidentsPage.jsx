@@ -7,7 +7,7 @@ import Icon from '../components/Icon';
 import IncidentTable from '../components/IncidentTable';
 import SectionTitle from '../components/SectionTitle';
 import { useToast } from '../components/Toast';
-import { FALLBACK_CATEGORIES, SEVERITIES, STATUSES } from '../constants';
+import { FALLBACK_CATEGORIES, SEVERITIES, STATUSES, VERIFICATION_STATUSES } from '../constants';
 
 const PAGE_SIZE = 10;
 const SORTS = [
@@ -25,6 +25,11 @@ export default function IncidentsPage() {
   const q = params.get('q') || '';
   const sort = params.get('sort') || 'priority';
   const page = Math.max(1, Number(params.get('page')) || 1);
+  // Trust layer filters (all kept in the URL)
+  const verification = params.get('verification_status') || '';
+  const maxTrust = params.get('max_trust') || '';
+  const group = params.get('group') === 'cluster';
+  const showDuplicates = params.get('duplicates') === '1';
 
   const [search, setSearch] = useState(q);
   const [categories, setCategories] = useState(FALLBACK_CATEGORIES);
@@ -69,7 +74,19 @@ export default function IncidentsPage() {
     setError('');
     try {
       const [list, s] = await Promise.all([
-        listIncidents({ status, severity, category, q, sort, limit: PAGE_SIZE, offset: (page - 1) * PAGE_SIZE }),
+        listIncidents({
+          status,
+          severity,
+          category,
+          q,
+          sort,
+          limit: PAGE_SIZE,
+          offset: (page - 1) * PAGE_SIZE,
+          verification_status: verification,
+          max_trust: maxTrust,
+          group: group ? 'cluster' : '',
+          include_duplicates: showDuplicates ? 'true' : '',
+        }),
         getStats(),
       ]);
       setData(list);
@@ -79,7 +96,7 @@ export default function IncidentsPage() {
     } finally {
       setLoading(false);
     }
-  }, [status, severity, category, q, sort, page]);
+  }, [status, severity, category, q, sort, page, verification, maxTrust, group, showDuplicates]);
 
   useEffect(() => {
     load();
@@ -117,7 +134,11 @@ export default function IncidentsPage() {
     }
   }
 
-  const filtered = Boolean(status || severity || category || q);
+  const filtered = Boolean(status || severity || category || q || verification || maxTrust);
+  const trustOn = Boolean(stats?.has_trust || data.items.some((i) => i.has_trust));
+  // Duplicates are hidden unless asked for (also filtered here in case the server ignores the flag).
+  const visible = showDuplicates ? data.items : data.items.filter((i) => !i.duplicate_of);
+  const hiddenDupes = data.items.length - visible.length;
   const from = data.total === 0 ? 0 : (page - 1) * PAGE_SIZE + 1;
   const to = Math.min(page * PAGE_SIZE, data.total);
   const pages = Math.max(1, Math.ceil(data.total / PAGE_SIZE));
@@ -199,6 +220,29 @@ export default function IncidentsPage() {
               {s} <span className="tabular-nums opacity-80">{stats?.by_status?.[s] ?? 0}</span>
             </button>
           ))}
+          {trustOn && (
+            <>
+              <span className="mx-1 hidden h-6 w-px bg-black/15 sm:block" aria-hidden="true" />
+              <button
+                type="button"
+                className={chipCls(maxTrust === '29')}
+                aria-pressed={maxTrust === '29'}
+                onClick={() => setParam({ max_trust: maxTrust === '29' ? '' : '29' })}
+              >
+                <Icon name="alert" className="h-3.5 w-3.5" /> Suspicious only
+                {stats?.suspicious != null && <span className="tabular-nums opacity-80">{stats.suspicious}</span>}
+              </button>
+              <button
+                type="button"
+                className={chipCls(verification === 'Corroborated')}
+                aria-pressed={verification === 'Corroborated'}
+                onClick={() => setParam({ verification_status: verification === 'Corroborated' ? '' : 'Corroborated' })}
+              >
+                <Icon name="users" className="h-3.5 w-3.5" /> Corroborated
+                {stats?.corroborated != null && <span className="tabular-nums opacity-80">{stats.corroborated}</span>}
+              </button>
+            </>
+          )}
           {filtered && (
             <button
               type="button"
@@ -212,11 +256,58 @@ export default function IncidentsPage() {
             </button>
           )}
         </div>
+
+        {trustOn && (
+          <div className="flex flex-wrap items-center gap-x-5 gap-y-3 border-t border-black/10 pt-3">
+            <label className="flex items-center gap-2 text-sm font-semibold text-ink-2">
+              <span className="text-[12px] font-black uppercase tracking-wide text-ink">Verification</span>
+              <select
+                className="input min-h-[38px] w-44 py-1"
+                value={verification}
+                onChange={(e) => setParam({ verification_status: e.target.value })}
+                aria-label="Filter by verification"
+              >
+                <option value="">All</option>
+                {VERIFICATION_STATUSES.map((v) => (
+                  <option key={v} value={v}>
+                    {v}
+                  </option>
+                ))}
+              </select>
+            </label>
+            <label className="inline-flex cursor-pointer items-center gap-2.5 text-sm font-bold text-ink">
+              <button
+                type="button"
+                role="switch"
+                aria-checked={group}
+                onClick={() => setParam({ group: group ? '' : 'cluster' })}
+                className={`relative h-6 w-11 shrink-0 rounded-full transition-colors duration-300 ${group ? 'bg-indigo-600' : 'bg-black/20'}`}
+              >
+                <span className={`absolute top-0.5 h-5 w-5 rounded-full bg-white shadow transition-all duration-300 ${group ? 'left-[22px]' : 'left-0.5'}`} />
+              </button>
+              Group by incident
+            </label>
+            <label className="inline-flex cursor-pointer items-center gap-2 text-sm font-bold text-ink">
+              <input
+                type="checkbox"
+                className="h-4 w-4 accent-brand"
+                checked={showDuplicates}
+                onChange={(e) => setParam({ duplicates: e.target.checked ? '1' : '' })}
+              />
+              Show duplicates
+            </label>
+            {hiddenDupes > 0 && (
+              <span className="text-xs text-ink-3">
+                {hiddenDupes} duplicate{hiddenDupes === 1 ? '' : 's'} hidden on this page
+              </span>
+            )}
+          </div>
+        )}
       </div>
 
       {error ? (
         <ErrorState message={error} onRetry={load} />
-      ) : !loading && data.items.length === 0 ? (
+      ) : !loading && visible.length === 0 ? (
         <EmptyState
           icon={filtered ? 'search' : 'inbox'}
           title={filtered ? 'No incidents match' : 'No incidents yet'}
@@ -225,7 +316,7 @@ export default function IncidentsPage() {
       ) : (
         <div className="card overflow-visible p-0">
           <div className="p-2.5 md:p-0">
-            <IncidentTable items={data.items} loading={loading && data.items.length === 0} onStatus={onStatus} onDelete={setToDelete} />
+            <IncidentTable items={visible} loading={loading && data.items.length === 0} onStatus={onStatus} onDelete={setToDelete} expandable={group} />
           </div>
         </div>
       )}

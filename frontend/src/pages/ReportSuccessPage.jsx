@@ -6,6 +6,7 @@ import ReporterBadge from '../components/ReporterBadge';
 import SeverityBadge from '../components/SeverityBadge';
 import StatusChip from '../components/StatusChip';
 import { useToast } from '../components/Toast';
+import VerificationBadge from '../components/VerificationBadge';
 
 export default function ReportSuccessPage() {
   const state = useLocation().state || {};
@@ -49,6 +50,32 @@ export default function ReportSuccessPage() {
           </button>
         </div>
       </div>
+
+      {incident.has_trust && (
+        <div className="card mt-4 flex animate-fade-up items-start gap-3 p-4 text-sm [animation-delay:100ms]" aria-live="polite">
+          <span className={`grid h-10 w-10 shrink-0 place-items-center rounded-full ${incident.verification_status === 'Corroborated' ? 'bg-blue-50 text-blue-700' : 'bg-paper text-ink-2'}`}>
+            <Icon name={incident.verification_status === 'Corroborated' ? 'users' : 'shield'} className="h-5 w-5" />
+          </span>
+          <div className="min-w-0 flex-1">
+            <div className="flex flex-wrap items-center gap-2">
+              <SeverityBadge level={incident.severity} size="sm" />
+              <VerificationBadge status={incident.verification_status} size="sm" />
+            </div>
+            <p className="mt-1.5 font-semibold text-ink">
+              {incident.verification_status === 'Corroborated'
+                ? 'Other people nearby reported this too — priority raised.'
+                : incident.verification_status === 'Verified'
+                  ? 'Responders have confirmed this report.'
+                  : 'Responders have been alerted. We’re verifying your report in the background.'}
+            </p>
+            {incident.cluster_size >= 2 && (
+              <p className="mt-0.5 text-ink-3">
+                This is report {incident.cluster_rank || incident.cluster_size} of {incident.cluster_size} for this incident.
+              </p>
+            )}
+          </div>
+        </div>
+      )}
 
       <div
         className={`mt-4 flex animate-fade-up items-start gap-3 rounded-md p-4 text-sm [animation-delay:120ms] ${

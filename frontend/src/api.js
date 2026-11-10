@@ -1,5 +1,6 @@
 // One request() helper + one function per backend endpoint.
-import { FALLBACK_CATEGORIES, categoryByCode, normSeverity, normStatus } from './constants';
+import { FALLBACK_CATEGORIES, categoryByCode, normSeverity, normStatus, normVerification } from './constants';
+import { getDeviceId } from './lib/device';
 import { mockRequest } from './mock';
 
 export const BASE_URL = import.meta.env.VITE_API_URL || 'http://localhost:8000/api';
@@ -10,10 +11,24 @@ export const USER_KEY = 'resqnet_user';
 export const SESSION_EVENT = 'resqnet:session';
 
 export class ApiError extends Error {
-  constructor(status, message) {
+  constructor(status, message, extra = {}) {
     super(message);
     this.status = status;
+    this.retryAfter = extra.retryAfter ?? null; // seconds, set on 429
   }
+}
+
+/** Seconds from a 429 body ({retry_after}) or a Retry-After header (seconds or HTTP date). */
+function parseRetryAfter(data, header) {
+  const fromBody = Number(data?.retry_after ?? data?.retryAfter);
+  if (Number.isFinite(fromBody) && fromBody > 0) return Math.ceil(fromBody);
+  if (header) {
+    const n = Number(header);
+    if (Number.isFinite(n) && n > 0) return Math.ceil(n);
+    const at = Date.parse(header);
+    if (!Number.isNaN(at)) return Math.max(1, Math.ceil((at - Date.now()) / 1000));
+  }
+  return 60;
 }
 
 /* ---------------- session (one session for both citizens and admins; role decides access) ---------------- */
@@ -79,6 +94,7 @@ function parseDetail(data, status) {
   if (status === 404) return 'Not found.';
   if (status === 403) return 'You don’t have permission to do that.';
   if (status === 409) return 'That already exists.';
+  if (status === 429) return 'Too many reports from this device.';
   if (status >= 500) return 'The server had a problem. Please try again.';
   return `Request failed (${status}).`;
 }
@@ -97,18 +113,20 @@ function buildQuery(params = {}) {
  *       'optional' → send token if there is one; caller handles 401.
  *       false      → never send a token.
  */
-export async function request(path, { method = 'GET', body, auth = false, query } = {}) {
+export async function request(path, { method = 'GET', body, auth = false, query, headers: extraHeaders = {} } = {}) {
   const token = auth ? getToken() : null;
 
   let status;
   let data = null;
+  let retryHeader = null;
 
   if (USE_MOCK) {
-    const res = await mockRequest(method, path, body, query || {}, token);
+    const res = await mockRequest(method, path, body, query || {}, token, extraHeaders);
     status = res.status;
     data = res.data;
+    retryHeader = res.headers?.['Retry-After'] ?? null;
   } else {
-    const headers = { Accept: 'application/json' };
+    const headers = { Accept: 'application/json', ...extraHeaders };
     if (body !== undefined) headers['Content-Type'] = 'application/json';
     if (token) headers.Authorization = `Bearer ${token}`;
     let res;
@@ -122,6 +140,7 @@ export async function request(path, { method = 'GET', body, auth = false, query 
       throw new ApiError(0, 'Cannot reach the server. Check your connection and try again.');
     }
     status = res.status;
+    retryHeader = res.headers.get('Retry-After');
     if (status !== 204) {
       const text = await res.text();
       if (text) {
@@ -135,6 +154,9 @@ export async function request(path, { method = 'GET', body, auth = false, query 
   }
 
   if (status === 401 && auth === 'required') handleUnauthorized();
+  if (status === 429) {
+    throw new ApiError(429, parseDetail(data, status) || 'Too many requests.', { retryAfter: parseRetryAfter(data, retryHeader) });
+  }
   if (status >= 400) throw new ApiError(status, parseDetail(data, status));
   return status === 204 ? null : data;
 }
@@ -175,6 +197,37 @@ function normReporter(raw) {
   return null;
 }
 
+const num = (v) => (v === null || v === undefined || v === '' || Number.isNaN(Number(v)) ? null : Number(v));
+const ids = (v) => (Array.isArray(v) ? v.map(Number).filter(Number.isFinite) : []);
+
+/**
+ * Trust-layer fields. `has_trust` is false when the backend predates the trust
+ * layer, so the UI can hide trust widgets instead of showing empty ones.
+ * `llm_assessment`: undefined = not supported, null = check still running.
+ */
+function normTrust(raw) {
+  const has = 'trust_score' in raw || 'verification_status' in raw || 'llm_assessment' in raw;
+  return {
+    has_trust: has,
+    trust_score: num(raw.trust_score),
+    trust_reasons: Array.isArray(raw.trust_reasons) ? raw.trust_reasons.map(normReason) : [],
+    verification_status: has ? normVerification(raw.verification_status) : null,
+    llm_assessment: 'llm_assessment' in raw ? raw.llm_assessment ?? null : undefined,
+    verification: raw.verification ?? null,
+    location_source: raw.location_source ?? (raw.latitude != null ? 'gps' : 'manual'),
+    location_accuracy_m: num(raw.location_accuracy_m),
+    location_mismatch_km: num(raw.location_mismatch_km),
+    duplicate_of: num(raw.duplicate_of),
+    duplicate_of_ref: raw.duplicate_of_ref ?? null,
+    cluster_id: raw.cluster_id ?? null,
+    cluster_size: Math.max(1, num(raw.cluster_size) ?? 1),
+    cluster_rank: num(raw.cluster_rank ?? raw.report_number),
+    corroborating_ids: ids(raw.corroborating_ids),
+    duplicate_ids: ids(raw.duplicate_ids),
+    cluster_people_affected: num(raw.cluster_people_affected),
+  };
+}
+
 export function normalizeIncident(raw) {
   if (!raw) return raw;
   const reporter = normReporter(raw);
@@ -190,6 +243,7 @@ export function normalizeIncident(raw) {
     reporter,
     // A report is anonymous unless the server linked it to an account.
     is_anonymous: typeof raw.is_anonymous === 'boolean' ? raw.is_anonymous : !reporter,
+    ...normTrust(raw),
     history: Array.isArray(raw.history)
       ? raw.history.map((h) => ({
           ...h,
@@ -227,13 +281,14 @@ export async function getCategories() {
 export async function createIncident(body, { anonymous = false } = {}) {
   const signedIn = Boolean(getToken());
   const payload = signedIn && anonymous ? { ...body, anonymous: true } : body;
+  const headers = { 'X-Device-Id': getDeviceId() };
   try {
-    const data = await request('/incidents', { method: 'POST', body: payload, auth: signedIn && !anonymous ? 'optional' : false });
+    const data = await request('/incidents', { method: 'POST', body: payload, headers, auth: signedIn && !anonymous ? 'optional' : false });
     return { incident: normalizeIncident(data), anonymousFallback: false };
   } catch (e) {
     if (e.status === 401 && signedIn && !anonymous) {
       clearSession();
-      const data = await request('/incidents', { method: 'POST', body, auth: false });
+      const data = await request('/incidents', { method: 'POST', body, headers, auth: false });
       return { incident: normalizeIncident(data), anonymousFallback: true };
     }
     throw e;
@@ -328,6 +383,27 @@ export async function deleteIncident(id) {
   await request(`/incidents/${id}`, { method: 'DELETE', auth: 'required' });
 }
 
+/** Trust layer: admin marks a report Verified or False Alarm. */
+export async function verifyIncident(id, { verification_status, note }) {
+  const body = { verification_status };
+  if (note && note.trim()) body.note = note.trim();
+  return normalizeIncident(await request(`/incidents/${id}/verify`, { method: 'PATCH', auth: 'required', body }));
+}
+
+/**
+ * Trust layer: reports in the same cluster.
+ * → { corroborating: [{...incident, distance_m, minutes_apart}], duplicates: [...] }
+ */
+export async function getRelated(id) {
+  const data = await request(`/incidents/${id}/related`, { auth: 'required' });
+  const one = (r) => ({ ...normalizeIncident(r), distance_m: num(r.distance_m), minutes_apart: num(r.minutes_apart) });
+  if (Array.isArray(data)) return { corroborating: data.filter((r) => !r.duplicate_of && !r.is_duplicate).map(one), duplicates: data.filter((r) => r.duplicate_of || r.is_duplicate).map(one) };
+  return {
+    corroborating: (data.corroborating ?? data.related ?? []).map(one),
+    duplicates: (data.duplicates ?? []).map(one),
+  };
+}
+
 export async function getStats() {
   const s = await request('/dashboard/stats', { auth: 'required' });
   const byStatus = {};
@@ -345,6 +421,16 @@ export async function getStats() {
     resolved: Number(s.resolved ?? 0),
     anonymous: s.anonymous ?? s.by_reporter?.anonymous ?? null,
     registered: s.registered ?? s.by_reporter?.registered ?? null,
+    // Trust layer (null when the backend doesn't provide them)
+    has_trust: 'unverified' in s || 'corroborated' in s || 'suspicious' in s,
+    unverified: num(s.unverified),
+    corroborated: num(s.corroborated),
+    verified: num(s.verified),
+    false_alarms: num(s.false_alarms),
+    suspicious: num(s.suspicious),
+    rate_limited_today: num(s.rate_limited_today),
+    active_clusters: num(s.active_clusters),
+    largest_cluster: s.largest_cluster && s.largest_cluster.size ? s.largest_cluster : null,
     by_status: byStatus,
     by_severity: bySeverity,
     by_category: byCategory.map((c) => ({ ...categoryByCode(c.code), ...c, count: Number(c.count ?? 0) })),

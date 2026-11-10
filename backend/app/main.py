@@ -44,6 +44,8 @@ app.add_middleware(
     allow_credentials=True,
     allow_methods=["*"],
     allow_headers=["*"],
+    # Let the browser read the 429 wait time (needed for the frontend countdown)
+    expose_headers=["Retry-After"],
 )
 
 

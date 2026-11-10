@@ -1,6 +1,7 @@
 import { useCallback, useEffect, useRef, useState } from 'react';
 import { Link } from 'react-router-dom';
 import { getStats, listIncidents } from '../api';
+import ClusterPill from '../components/ClusterPill';
 import CriticalBanner from '../components/CriticalBanner';
 import { ErrorState } from '../components/EmptyState';
 import Icon, { CategoryIcon } from '../components/Icon';
@@ -11,6 +12,34 @@ import StatCard from '../components/StatCard';
 import { FALLBACK_CATEGORIES, SEVERITIES, SEVERITY_BAR, STATUSES, STATUS_BAR, formatTime } from '../constants';
 
 const REFRESH_MS = 15000;
+
+const MINI_TONES = {
+  blue: 'border-l-blue-600 text-blue-800',
+  slate: 'border-l-slate-400 text-ink',
+  amber: 'border-l-amber-500 text-amber-800',
+  gray: 'border-l-gray-400 text-gray-600',
+  red: 'border-l-brand text-brand-dark',
+};
+
+function MiniStat({ label, value, tone, icon, to }) {
+  const body = (
+    <>
+      <span className="flex items-center justify-between gap-2">
+        <span className="text-[10.5px] font-black uppercase tracking-[0.12em] text-ink-3">{label}</span>
+        <Icon name={icon} className="h-4 w-4 opacity-70" />
+      </span>
+      <span className="mt-1 block text-2xl font-black tabular-nums">{value ?? '–'}</span>
+    </>
+  );
+  const cls = `card block border-l-4 px-3.5 py-3 transition-all duration-300 ${MINI_TONES[tone]}`;
+  return to ? (
+    <Link to={to} className={`${cls} card-hover`}>
+      {body}
+    </Link>
+  ) : (
+    <div className={cls}>{body}</div>
+  );
+}
 
 function StackedBar({ title, keys, counts, colors }) {
   const total = keys.reduce((s, k) => s + (counts[k] || 0), 0);
@@ -72,12 +101,26 @@ export default function DashboardPage() {
   const [refreshing, setRefreshing] = useState(false);
   const [error, setError] = useState('');
   const [updatedAt, setUpdatedAt] = useState(null);
+  const [critBreakdown, setCritBreakdown] = useState('');
   const alive = useRef(true);
 
   const load = useCallback(async (manual = false) => {
     if (manual) setRefreshing(true);
     try {
       const [s, recent] = await Promise.all([getStats(), listIncidents({ sort: 'newest', limit: 5 })]);
+      if (!alive.current) return;
+      // Trust layer: "3 active critical (2 corroborated, 1 unverified)"
+      if (s.has_trust && s.critical_active > 0) {
+        try {
+          const crit = await listIncidents({ severity: 'Critical', sort: 'priority', limit: 50 });
+          const active = crit.items.filter((i) => i.status !== 'Resolved' && i.verification_status !== 'False Alarm');
+          const corroborated = active.filter((i) => i.verification_status === 'Corroborated' || i.verification_status === 'Verified').length;
+          const unverified = active.length - corroborated;
+          if (alive.current) setCritBreakdown(active.length ? [corroborated && `${corroborated} corroborated`, unverified && `${unverified} unverified`].filter(Boolean).join(', ') : '');
+        } catch {
+          if (alive.current) setCritBreakdown('');
+        }
+      } else setCritBreakdown('');
       if (!alive.current) return;
       setStats(s);
       setLatest(recent.items);
@@ -131,7 +174,7 @@ export default function DashboardPage() {
 
       {error && <ErrorState message={error} onRetry={() => load(true)} />}
 
-      {stats && <CriticalBanner count={stats.critical_active} items={stats.recent_critical} />}
+      {stats && <CriticalBanner count={stats.critical_active} items={stats.recent_critical} breakdown={critBreakdown} />}
 
       <div className="stagger grid grid-cols-2 gap-3 sm:gap-4 lg:grid-cols-4">
         <StatCard label="Total reported" value={stats?.total ?? 0} loading={loading} icon="inbox" sub="all time" />
@@ -139,6 +182,44 @@ export default function DashboardPage() {
         <StatCard label="Pending" value={stats?.pending ?? 0} tone="amber" icon="clock" loading={loading} sub="not resolved" />
         <StatCard label="Resolved" value={stats?.resolved ?? 0} tone="green" icon="check-circle" loading={loading} sub={`${resolvedPct}% of total`} />
       </div>
+
+      {stats?.has_trust && (
+        <div className="grid gap-4 2xl:grid-cols-[minmax(0,1.6fr)_minmax(0,1fr)]">
+          <div className="stagger grid grid-cols-2 gap-2.5 sm:grid-cols-3 lg:grid-cols-5">
+            <MiniStat label="Corroborated" value={stats.corroborated} tone="blue" icon="users" to="/admin/incidents?verification_status=Corroborated" />
+            <MiniStat label="Unverified" value={stats.unverified} tone="slate" icon="circle-dashed" to="/admin/incidents?verification_status=Unverified" />
+            <MiniStat label="Suspicious" value={stats.suspicious} tone="amber" icon="alert" to="/admin/incidents?max_trust=29" />
+            <MiniStat label="False alarms" value={stats.false_alarms} tone="gray" icon="x" to="/admin/incidents?verification_status=False%20Alarm" />
+            <MiniStat label="Rate-limited today" value={stats.rate_limited_today} tone="red" icon="timer" />
+          </div>
+          {stats.largest_cluster ? (
+            <Link
+              to={`/admin/incidents/${stats.largest_cluster.root_id}`}
+              className="card card-hover group flex animate-fade-up items-center gap-4 border-l-4 border-l-indigo-600 p-4"
+            >
+              <span className="grid h-11 w-11 shrink-0 place-items-center rounded-full bg-indigo-50 text-indigo-700">
+                <Icon name="layers" />
+              </span>
+              <span className="min-w-0 flex-1">
+                <span className="block text-[10.5px] font-black uppercase tracking-[0.12em] text-ink-3">
+                  Largest active cluster{stats.active_clusters != null && ` · ${stats.active_clusters} active`}
+                </span>
+                <span className="mt-0.5 block truncate font-black text-ink">{stats.largest_cluster.title}</span>
+                <span className="mt-1 inline-block">
+                  <ClusterPill size={stats.largest_cluster.size} />
+                </span>
+              </span>
+              <span className="inline-flex items-center gap-1 text-sm font-bold text-brand">
+                View <Icon name="arrow-right" className="h-4 w-4 transition-transform group-hover:translate-x-0.5" />
+              </span>
+            </Link>
+          ) : (
+            <div className="card flex items-center gap-3 p-4 text-sm text-ink-3">
+              <Icon name="layers" className="h-5 w-5" /> No active clusters right now.
+            </div>
+          )}
+        </div>
+      )}
 
       <div className="grid gap-4 lg:grid-cols-[minmax(0,1.3fr)_minmax(0,1fr)]">
         <section className="card p-5">

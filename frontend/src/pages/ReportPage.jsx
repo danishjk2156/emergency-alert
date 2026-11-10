@@ -1,4 +1,4 @@
-import { useEffect, useMemo, useState } from 'react';
+import { useCallback, useEffect, useMemo, useState } from 'react';
 import { Link, useNavigate } from 'react-router-dom';
 import { createIncident, getCategories } from '../api';
 import { useAuth } from '../auth';
@@ -9,7 +9,8 @@ import SectionTitle from '../components/SectionTitle';
 import SeverityBadge from '../components/SeverityBadge';
 import Spinner from '../components/Spinner';
 import { useToast } from '../components/Toast';
-import { FALLBACK_CATEGORIES, SAFETY_TIPS, SEVERITY_BAR } from '../constants';
+import { FALLBACK_CATEGORIES, SAFETY_TIPS, SEVERITY_BAR, formatCountdown, formatDistance } from '../constants';
+import useGeolocation from '../hooks/useGeolocation';
 import { computeSeverity } from '../severity';
 
 const MAX_DESC = 2000;
@@ -18,13 +19,23 @@ const EMPTY = {
   title: '',
   description: '',
   location: '',
-  latitude: null,
-  longitude: null,
   people_affected: 1,
   contact_name: '',
   contact_phone: '',
   contact_email: '',
+  website: '', // honeypot: real people never see or fill this
 };
+
+const RATE_KEY = 'resq_rate_limit_until';
+const readRateLimit = () => {
+  try {
+    const until = Number(localStorage.getItem(RATE_KEY));
+    return until > Date.now() ? until : 0;
+  } catch {
+    return 0;
+  }
+};
+const LOW_ACCURACY_M = 1000;
 
 // Same patterns the backend enforces (backend/app/schemas.py), so a valid form never gets rejected.
 const PHONE_RE = /^\+?[0-9]{7,15}$/;
@@ -35,7 +46,7 @@ const normalizePhone = (v) => {
   return (t.startsWith('+') ? '+' : '') + t.replace(/\D/g, '');
 };
 
-function validate(f) {
+function validate(f, gpsOk) {
   const e = {};
   const title = f.title.trim();
   const desc = f.description.trim();
@@ -45,8 +56,10 @@ function validate(f) {
   else if (title.length > 120) e.title = 'Title must be 120 characters or less.';
   if (desc.length < 10) e.description = 'Description must be at least 10 characters.';
   else if (f.description.length > MAX_DESC) e.description = `Description must be ${MAX_DESC} characters or less.`;
-  if (loc.length < 3) e.location = 'Location must be at least 3 characters.';
-  else if (loc.length > 200) e.location = 'Location must be 200 characters or less.';
+  if (loc.length > 200) e.location = 'Location must be 200 characters or less.';
+  else if (loc.length < 3 && !(gpsOk && loc.length === 0)) {
+    e.location = gpsOk ? 'Type at least 3 characters, or leave it empty to use GPS.' : 'Location must be at least 3 characters.';
+  }
   if (!Number.isInteger(f.people_affected) || f.people_affected < 0) e.people_affected = 'Enter 0 or more.';
   if (f.contact_name.trim().length > 80) e.contact_name = 'Name must be 80 characters or less.';
   if (f.contact_phone.trim() && !PHONE_RE.test(normalizePhone(f.contact_phone))) e.contact_phone = 'Phone must have 7–15 digits (spaces and dashes are fine).';
@@ -145,9 +158,14 @@ export default function ReportPage() {
   const [form, setForm] = useState(EMPTY);
   const [touched, setTouched] = useState({});
   const [anonymous, setAnonymous] = useState(false);
-  const [locating, setLocating] = useState(false);
+  const geo = useGeolocation();
+  const gpsOk = geo.status === 'ok' && geo.coords != null;
   const [submitting, setSubmitting] = useState(false);
   const [serverError, setServerError] = useState('');
+  const [retryable, setRetryable] = useState(false);
+  const [limitUntil, setLimitUntil] = useState(readRateLimit);
+  const [now, setNow] = useState(() => Date.now());
+  const limited = limitUntil > now;
 
   const linked = isSignedIn && !anonymous;
 
@@ -161,7 +179,35 @@ export default function ReportPage() {
     };
   }, []);
 
-  const errors = useMemo(() => validate(form), [form]);
+  useEffect(() => {
+    if (!limitUntil) return undefined;
+    const t = setInterval(() => {
+      const n = Date.now();
+      setNow(n);
+      if (n >= limitUntil) {
+        setLimitUntil(0);
+        try {
+          localStorage.removeItem(RATE_KEY);
+        } catch {
+          /* ignore */
+        }
+      }
+    }, 1000);
+    return () => clearInterval(t);
+  }, [limitUntil]);
+
+  const startRateLimit = useCallback((seconds) => {
+    const until = Date.now() + Math.max(1, seconds) * 1000;
+    setNow(Date.now());
+    setLimitUntil(until);
+    try {
+      localStorage.setItem(RATE_KEY, String(until));
+    } catch {
+      /* ignore */
+    }
+  }, []);
+
+  const errors = useMemo(() => validate(form, gpsOk), [form, gpsOk]);
   const isValid = Object.keys(errors).length === 0;
   const preview = useMemo(
     () => (form.category_code ? computeSeverity(form.category_code, form.people_affected, `${form.title} ${form.description}`) : null),
@@ -180,48 +226,35 @@ export default function ReportPage() {
     'aria-describedby': err(key) ? `${key}-error` : undefined,
   });
 
-  function attachGps() {
-    if (!('geolocation' in navigator)) {
-      toast('Location is not supported in this browser.', 'error');
-      return;
-    }
-    setLocating(true);
-    navigator.geolocation.getCurrentPosition(
-      (pos) => {
-        const { latitude, longitude } = pos.coords;
-        setForm((f) => ({
-          ...f,
-          latitude: Number(latitude.toFixed(6)),
-          longitude: Number(longitude.toFixed(6)),
-          location: f.location.trim() ? f.location : `GPS ${latitude.toFixed(5)}, ${longitude.toFixed(5)}`,
-        }));
-        setLocating(false);
-        toast('GPS location attached');
-      },
-      (e) => {
-        setLocating(false);
-        toast(e.code === 1 ? 'Location permission denied. Please type the address.' : 'Could not get your location. Please type the address.', 'error');
-      },
-      { enableHighAccuracy: true, timeout: 10000, maximumAge: 60000 },
-    );
-  }
+  // Feedback when the location request finishes
+  useEffect(() => {
+    if (geo.status === 'ok') toast(geo.accuracy != null && geo.accuracy > LOW_ACCURACY_M ? 'Location attached (low accuracy)' : 'GPS location attached');
+    // only on status change
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [geo.status]);
 
   async function onSubmit(e) {
-    e.preventDefault();
+    e?.preventDefault();
     setTouched(Object.fromEntries(Object.keys(EMPTY).map((k) => [k, true])));
-    if (!isValid || submitting) return;
+    if (!isValid || submitting || limited) return;
     setSubmitting(true);
     setServerError('');
+    setRetryable(false);
+    const typed = form.location.trim();
     const body = {
       title: form.title.trim(),
       description: form.description.trim(),
       category_code: form.category_code,
-      location: form.location.trim(),
       people_affected: form.people_affected,
+      location_source: gpsOk ? 'gps' : 'manual',
+      website: form.website, // honeypot
     };
-    if (form.latitude !== null) {
-      body.latitude = form.latitude;
-      body.longitude = form.longitude;
+    // Empty typed location + GPS: the server reverse-geocodes the address.
+    if (typed) body.location = typed;
+    if (gpsOk) {
+      body.latitude = geo.coords.latitude;
+      body.longitude = geo.coords.longitude;
+      if (geo.accuracy != null) body.location_accuracy_m = Math.round(geo.accuracy);
     }
     // Signed in + linked: the server fills name/email from the account; only an extra phone is sent.
     const name = linked ? user?.name || '' : form.contact_name.trim();
@@ -230,14 +263,34 @@ export default function ReportPage() {
     if (form.contact_phone.trim()) body.contact_phone = normalizePhone(form.contact_phone);
     if (email && EMAIL_RE.test(email)) body.contact_email = email;
 
+    const send = async (payload) => createIncident(payload, { anonymous: isSignedIn && anonymous });
     try {
-      const { incident, anonymousFallback } = await createIncident(body, { anonymous: isSignedIn && anonymous });
+      let result;
+      try {
+        result = await send(body);
+      } catch (ex) {
+        // Older servers require a typed location; fall back to the coordinates as text.
+        if (ex.status === 422 && !body.location && gpsOk && /location/i.test(ex.message)) {
+          result = await send({ ...body, location: `GPS ${geo.coords.latitude.toFixed(5)}, ${geo.coords.longitude.toFixed(5)}` });
+        } else throw ex;
+      }
+      const { incident, anonymousFallback } = result;
       if (anonymousFallback) toast('Your session had expired, so the report was sent anonymously.', 'info');
       else toast('Report submitted');
-      navigate('/report/success', { state: { incident, linked: linked && !anonymousFallback } });
+      navigate('/report/success', { state: { incident } });
     } catch (ex) {
-      setServerError(ex.message || 'Could not submit the report.');
-      toast('Report not sent. Please try again.', 'error');
+      if (ex.status === 429) {
+        startRateLimit(ex.retryAfter ?? 60);
+        toast('Too many reports from this device. Call 112 if this is urgent.', 'error');
+      } else if (ex.status === 0 || ex.status >= 500) {
+        // Keep everything the user typed and offer a one-tap retry.
+        setRetryable(true);
+        setServerError('Couldn’t send your report.');
+        toast('Couldn’t send. Your details are kept — tap Retry.', 'error');
+      } else {
+        setServerError(ex.message || 'Could not submit the report.');
+        toast('Report not sent. Please check the form.', 'error');
+      }
     } finally {
       setSubmitting(false);
     }
@@ -310,7 +363,7 @@ export default function ReportPage() {
         </SectionTitle>
 
         <div className="mt-8 grid gap-6 lg:grid-cols-[minmax(0,1.45fr)_minmax(0,1fr)] lg:gap-8">
-          <form onSubmit={onSubmit} noValidate className="card space-y-6 p-5 sm:p-7">
+          <form onSubmit={onSubmit} noValidate className="card relative space-y-6 p-5 sm:p-7">
             <IdentityPanel user={user} isSignedIn={isSignedIn} anonymous={anonymous} setAnonymous={setAnonymous} />
 
             <fieldset>
@@ -360,32 +413,77 @@ export default function ReportPage() {
             </Field>
 
             <div className="grid gap-6 sm:grid-cols-[minmax(0,1fr)_190px]">
-              <Field
-                id="location"
-                label="Location"
-                error={err('location')}
-                hint={
-                  form.latitude !== null ? (
-                    <p className="mt-1.5 flex animate-fade-in items-center gap-1.5 text-xs font-bold text-green-800">
-                      <Icon name="pin" className="h-3.5 w-3.5" /> GPS attached ({form.latitude}, {form.longitude})
-                      <button type="button" className="ml-1 text-ink-3 underline hover:text-ink" onClick={() => setForm((f) => ({ ...f, latitude: null, longitude: null }))}>
-                        remove
+              <div>
+                <Field
+                  id="location"
+                  label="Location"
+                  optional={gpsOk && !form.location.trim()}
+                  error={err('location')}
+                >
+                  <div className="flex gap-2">
+                    <div className="relative flex-1">
+                      <Icon name="pin" className="pointer-events-none absolute left-3.5 top-1/2 h-[18px] w-[18px] -translate-y-1/2 text-ink-3" />
+                      <input
+                        {...inputProps('location')}
+                        className="input pl-10"
+                        maxLength={200}
+                        placeholder={gpsOk ? 'Optional — we’ll detect the address from GPS' : 'Address or landmark'}
+                        autoComplete="street-address"
+                      />
+                    </div>
+                    <button
+                      type="button"
+                      onClick={geo.request}
+                      disabled={geo.status === 'locating' || geo.reason === 'insecure' || geo.reason === 'unsupported'}
+                      className="btn shrink-0 whitespace-nowrap"
+                      aria-label={geo.status === 'locating' ? 'Getting location' : 'Use my location'}
+                    >
+                      {geo.status === 'locating' ? <Spinner /> : <Icon name="crosshair" className="h-[18px] w-[18px] text-brand" />}
+                      <span className="hidden sm:inline">{geo.status === 'locating' ? 'Getting location…' : gpsOk ? 'Update location' : 'Use my location'}</span>
+                    </button>
+                  </div>
+                </Field>
+                <div aria-live="polite" className="mt-2 min-h-[1px]">
+                  {gpsOk && (geo.accuracy == null || geo.accuracy <= LOW_ACCURACY_M) && (
+                    <p className="inline-flex animate-fade-in flex-wrap items-center gap-2 rounded-full bg-green-700 px-3 py-1 text-xs font-bold text-white">
+                      <Icon name="satellite" className="h-3.5 w-3.5" />
+                      GPS attached{geo.accuracy != null ? ` · ±${Math.round(geo.accuracy)} m` : ''}
+                      <button type="button" onClick={geo.clear} className="underline decoration-white/60 underline-offset-2 hover:decoration-white">
+                        Remove
                       </button>
                     </p>
-                  ) : null
-                }
-              >
-                <div className="flex gap-2">
-                  <div className="relative flex-1">
-                    <Icon name="pin" className="pointer-events-none absolute left-3.5 top-1/2 h-[18px] w-[18px] -translate-y-1/2 text-ink-3" />
-                    <input {...inputProps('location')} className="input pl-10" maxLength={200} placeholder="Address or landmark" autoComplete="street-address" />
-                  </div>
-                  <button type="button" onClick={attachGps} disabled={locating} className="btn shrink-0 whitespace-nowrap" aria-label="Use my location">
-                    {locating ? <Spinner /> : <Icon name="crosshair" className="h-[18px] w-[18px] text-brand" />}
-                    <span className="hidden sm:inline">Use my location</span>
-                  </button>
+                  )}
+                  {gpsOk && geo.accuracy != null && geo.accuracy > LOW_ACCURACY_M && (
+                    <p className="inline-flex animate-fade-in flex-wrap items-center gap-2 rounded-md bg-amber-100 px-3 py-1.5 text-xs font-bold text-amber-900">
+                      <Icon name="alert" className="h-3.5 w-3.5" />
+                      Low accuracy (±{formatDistance(geo.accuracy)}) — please also type the address
+                      <button type="button" onClick={geo.clear} className="underline underline-offset-2">
+                        Remove
+                      </button>
+                    </p>
+                  )}
+                  {geo.status === 'denied' && (
+                    <p className="flex items-center gap-1.5 text-xs font-semibold text-ink-3">
+                      <Icon name="lock" className="h-3.5 w-3.5" /> Location blocked — type the address above.
+                    </p>
+                  )}
+                  {geo.status === 'timeout' && (
+                    <p className="flex items-center gap-1.5 text-xs font-semibold text-ink-3">
+                      <Icon name="timer" className="h-3.5 w-3.5" /> Location took too long.{' '}
+                      <button type="button" className="font-bold text-brand underline" onClick={geo.request}>
+                        Try again
+                      </button>{' '}
+                      or type the address.
+                    </p>
+                  )}
+                  {geo.status === 'unavailable' && (
+                    <p className="flex items-center gap-1.5 text-xs font-semibold text-ink-3">
+                      <Icon name="pin" className="h-3.5 w-3.5" />
+                      {geo.reason === 'insecure' ? 'Location needs HTTPS — type the address instead.' : 'Location isn’t available on this device — type the address.'}
+                    </p>
+                  )}
                 </div>
-              </Field>
+              </div>
 
               <Field id="people_affected" label="People affected" error={err('people_affected')}>
                 <div className="flex h-[44px] overflow-hidden rounded-md border-[1.5px] border-field bg-white transition-[border-color,box-shadow] focus-within:border-brand focus-within:ring-4 focus-within:ring-brand/15">
@@ -437,7 +535,7 @@ export default function ReportPage() {
                   </span>
                 </p>
                 <div className="mt-3 max-w-xs">
-                  <Field id="contact_phone" label="Phone for this report" optional error={err('contact_phone')}>
+                  <Field id="contact_phone" label="Phone for this report" optional error={err('contact_phone')} hint={<p className="mt-1.5 text-xs text-ink-3">Adding a phone number helps responders verify faster. It is never shown publicly.</p>}>
                     <input {...inputProps('contact_phone')} className="input" type="tel" autoComplete="tel" inputMode="tel" placeholder="9876543210" />
                   </Field>
                 </div>
@@ -455,7 +553,7 @@ export default function ReportPage() {
                   <Field id="contact_name" label="Name" optional error={err('contact_name')}>
                     <input {...inputProps('contact_name')} className="input" autoComplete="name" maxLength={80} />
                   </Field>
-                  <Field id="contact_phone" label="Phone" optional error={err('contact_phone')}>
+                  <Field id="contact_phone" label="Phone" optional error={err('contact_phone')} hint={<p className="mt-1.5 text-xs text-ink-3">Adding a phone number helps responders verify faster. It is never shown publicly.</p>}>
                     <input {...inputProps('contact_phone')} className="input" type="tel" autoComplete="tel" inputMode="tel" placeholder="9876543210" />
                   </Field>
                   <Field id="contact_email" label="Email" optional error={err('contact_email')}>
@@ -465,14 +563,44 @@ export default function ReportPage() {
               </details>
             )}
 
-            {serverError && (
-              <div role="alert" className="flex animate-fade-up items-start gap-2 rounded-md border-l-4 border-brand bg-brand-soft px-3 py-2.5 text-sm font-semibold text-brand-deep">
-                <Icon name="alert" className="mt-0.5 h-4 w-4" /> {serverError}
+            {/* Honeypot: hidden from people and screen readers; bots tend to fill it */}
+            <div className="absolute -left-[9999px] top-auto h-px w-px overflow-hidden" aria-hidden="true">
+              <label htmlFor="website">Website</label>
+              <input id="website" name="website" type="text" tabIndex={-1} autoComplete="off" value={form.website} onChange={(e) => set('website', e.target.value)} />
+            </div>
+
+            {limited && (
+              <div role="alert" className="animate-fade-up overflow-hidden rounded-md border-2 border-brand bg-brand-soft">
+                <div className="flex flex-wrap items-center gap-4 p-4">
+                  <span className="grid h-12 w-12 shrink-0 place-items-center rounded-full bg-brand text-white">
+                    <Icon name="timer" className="h-6 w-6" />
+                  </span>
+                  <div className="min-w-0 flex-1">
+                    <p className="font-black uppercase tracking-wide text-brand-deep">Too many reports from this device.</p>
+                    <p className="text-sm text-ink-2" aria-live="polite">
+                      Try again in <span className="font-mono text-base font-bold tabular-nums text-ink">{formatCountdown((limitUntil - now) / 1000)}</span>
+                    </p>
+                  </div>
+                </div>
+                <a href="tel:112" className="flex min-h-[56px] items-center justify-center gap-2 bg-brand text-lg font-black uppercase tracking-wide text-white transition-colors hover:bg-brand-dark">
+                  <Icon name="phone" className="h-5 w-5" /> Call 112 now
+                </a>
+              </div>
+            )}
+
+            {serverError && !limited && (
+              <div role="alert" className="flex animate-fade-up flex-wrap items-center gap-2 rounded-md border-l-4 border-brand bg-brand-soft px-3 py-2.5 text-sm font-semibold text-brand-deep">
+                <Icon name="alert" className="h-4 w-4" /> <span className="flex-1">{serverError}</span>
+                {retryable && (
+                  <button type="button" onClick={() => onSubmit()} disabled={submitting} className="btn btn-primary">
+                    {submitting ? <Spinner /> : <Icon name="refresh" className="h-4 w-4" />} Retry
+                  </button>
+                )}
               </div>
             )}
 
             <div>
-              <button type="submit" disabled={!isValid || submitting} className="btn btn-primary min-h-[54px] w-full text-[15px]">
+              <button type="submit" disabled={!isValid || submitting || limited} className="btn btn-primary min-h-[54px] w-full text-[15px]">
                 {submitting ? (
                   <>
                     <Spinner /> Sending report…
@@ -483,7 +611,7 @@ export default function ReportPage() {
                   </>
                 )}
               </button>
-              {!isValid && <p className="mt-2 text-center text-xs font-medium text-ink-3">Complete the required fields to enable submit.</p>}
+              {!isValid && !limited && <p className="mt-2 text-center text-xs font-medium text-ink-3">Complete the required fields to enable submit.</p>}
             </div>
           </form>
 

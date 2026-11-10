@@ -23,6 +23,7 @@ export const STATUS_STYLES = {
   Pending: 'border-amber-600 text-amber-800',
   'In Progress': 'border-blue-700 text-blue-800',
   Resolved: 'border-green-700 text-green-800',
+  'False Alarm': 'border-gray-400 text-gray-500 line-through',
 };
 
 export const STATUS_BAR = {
@@ -30,6 +31,7 @@ export const STATUS_BAR = {
   Pending: 'bg-amber-500',
   'In Progress': 'bg-blue-700',
   Resolved: 'bg-green-700',
+  'False Alarm': 'bg-gray-300',
 };
 
 // Used if GET /categories fails, and to resolve a bare category code.
@@ -93,10 +95,49 @@ const STATUS_MAP = {
   inprogress: 'In Progress',
   resolved: 'Resolved',
   closed: 'Resolved',
+  'false alarm': 'False Alarm',
+  false_alarm: 'False Alarm',
 };
 
 export const normSeverity = (s) => SEV_MAP[String(s || '').toLowerCase()] || 'Low';
 export const normStatus = (s) => STATUS_MAP[String(s || '').toLowerCase()] || 'Reported';
+
+/* ---------- trust layer ---------- */
+
+export const VERIFICATION_STATUSES = ['Unverified', 'Corroborated', 'Verified', 'False Alarm'];
+const VERIF_MAP = {
+  unverified: 'Unverified',
+  pending: 'Unverified',
+  corroborated: 'Corroborated',
+  verified: 'Verified',
+  'false alarm': 'False Alarm',
+  false_alarm: 'False Alarm',
+};
+export const normVerification = (s) => VERIF_MAP[String(s || '').toLowerCase()] || 'Unverified';
+
+/** 0–29 Suspicious · 30–69 Unverified · 70–100 Likely genuine */
+export function trustBand(score) {
+  if (score == null) return null;
+  if (score < 30) return { key: 'suspicious', label: 'Suspicious', bar: 'bg-red-600', text: 'text-red-700', track: 'border-red-600' };
+  if (score < 70) return { key: 'unverified', label: 'Unverified', bar: 'bg-slate-400', text: 'text-ink-2', track: 'border-slate-400' };
+  return { key: 'genuine', label: 'Likely genuine', bar: 'bg-green-600', text: 'text-green-800', track: 'border-green-600' };
+}
+
+export const isSuspicious = (i) => i?.trust_score != null && i.trust_score < 30;
+export const isFalseAlarm = (i) => i?.verification_status === 'False Alarm' || i?.status === 'False Alarm';
+
+export function formatDistance(m) {
+  if (m == null) return null;
+  return m < 1000 ? `${Math.round(m)} m` : `${(m / 1000).toFixed(m < 10000 ? 1 : 0)} km`;
+}
+
+export function formatCountdown(sec) {
+  const s = Math.max(0, Math.ceil(sec));
+  const h = Math.floor(s / 3600);
+  const m = Math.floor((s % 3600) / 60);
+  const r = String(s % 60).padStart(2, '0');
+  return h ? `${h}:${String(m).padStart(2, '0')}:${r}` : `${m}:${r}`;
+}
 
 /* ---------- date helpers (en-IN) ---------- */
 

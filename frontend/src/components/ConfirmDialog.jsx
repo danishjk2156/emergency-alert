@@ -2,7 +2,7 @@ import { useEffect, useRef } from 'react';
 import Icon from './Icon';
 import Spinner from './Spinner';
 
-export default function ConfirmDialog({ open, title, message, confirmLabel = 'Delete', busy, onConfirm, onCancel }) {
+export default function ConfirmDialog({ open, title, message, confirmLabel = 'Delete', icon = 'trash', confirmClass = 'btn-primary', busy, onConfirm, onCancel }) {
   const cancelRef = useRef(null);
 
   useEffect(() => {
@@ -29,7 +29,7 @@ export default function ConfirmDialog({ open, title, message, confirmLabel = 'De
         <div className="h-1.5 bg-brand" />
         <div className="p-6">
           <span className="grid h-11 w-11 place-items-center rounded-full bg-brand-soft text-brand">
-            <Icon name="trash" />
+            <Icon name={icon} />
           </span>
           <h2 id="confirm-title" className="mt-3 text-lg font-black uppercase tracking-wide text-ink">
             {title}
@@ -41,7 +41,7 @@ export default function ConfirmDialog({ open, title, message, confirmLabel = 'De
             <button ref={cancelRef} type="button" className="btn" onClick={onCancel} disabled={busy}>
               Cancel
             </button>
-            <button type="button" className="btn btn-primary" onClick={onConfirm} disabled={busy}>
+            <button type="button" className={`btn ${confirmClass}`} onClick={onConfirm} disabled={busy}>
               {busy && <Spinner />}
               {confirmLabel}
             </button>

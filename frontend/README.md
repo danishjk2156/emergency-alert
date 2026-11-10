@@ -64,6 +64,54 @@ src/
 
 Citizen demo in mock mode: `priya@example.com / priya1234`.
 
+## Trust layer (v2)
+
+**Core rule:** low trust never hides or delays an emergency. Trust is shown next to severity, never instead of it, and active Critical incidents stay red and on top even when unverified.
+
+**Report form**
+
+- **Device id:** every report sends `X-Device-Id`, a random per-browser UUID from `src/lib/device.js`.
+- **Location:** "Use my location" (`src/hooks/useGeolocation.js`) shows the GPS accuracy, warns when it is above 1 km, and handles denied, timeout and no-HTTPS cases.
+- **Typed address:** optional once GPS is attached, because the server reverse-geocodes it. Older servers that still require it get the coordinates as text.
+- **Honeypot:** a hidden `website` field, which real people never fill.
+- **429 (rate limit):** shows a live countdown and a big "Call 112 now" button. The countdown survives a page reload.
+- **Network or 500 errors:** keep everything typed and offer a Retry button.
+
+**Success page**
+
+- Shows the verification badge, plus "report n of N" when other people reported the same incident.
+- Trust scores are never shown to the public.
+
+**Admin**
+
+- **Incidents list:**
+  - Trust and Verification columns, with a cluster pill next to the title.
+  - Filters: Verification dropdown, "Suspicious only" and "Corroborated" chips, "Group by incident" (with expandable member rows) and "Show duplicates", all kept in the URL.
+  - Row styles: suspicious rows get a dashed amber edge; false alarms are faded with the title struck through.
+- **Incident detail:**
+  - The header shows the trust meter, cluster pill and cluster estimate, plus a duplicate banner when relevant.
+  - A Verification panel with signed trust reasons, location info, and "Mark verified" and "False alarm" buttons (with confirmation and an optional note).
+  - An AI check card that polls every 3 s for up to 30 s, and a Related reports card.
+- **Dashboard:** a second stat row (Corroborated, Unverified, Suspicious, False alarms, Rate-limited today), a largest-cluster callout, and a critical banner showing the verification breakdown.
+
+**Against a backend without the trust layer,** every trust widget hides itself and nothing breaks.
+
+**The mock backend** (`npm run dev:mock`) simulates the whole layer:
+- rate limit of 3 reports per 10 minutes per device,
+- AI check that finishes about 5 s after a report,
+- trust scoring,
+- 1.5 km / 3 h clustering,
+- same-device duplicates within 30 minutes,
+- verification and device reputation.
+
+### Trust layer test script (`npm run dev:mock`)
+
+1. **Location and success page.** On `/report`, use **Use my location** and allow it. A chip shows the accuracy (e.g. "GPS attached · ±40 m"). Submit, and the success page shows **Unverified** with "We're verifying your report in the background". In Velachery it joins the seeded cluster and shows **Corroborated** instead.
+2. **Rate limit.** Submit 4 reports quickly from one browser. The 4th shows the 429 panel with a countdown and **Call 112 now**, and Submit stays disabled.
+3. **Suspicious report.** Submit "test asdf". In the admin list it shows **Suspicious** with a dashed edge, and its AI check card says it looks like gibberish or a test.
+4. **Clusters.** The seed data has three Velachery flood reports. **Group by incident** shows one row ×3, all **Corroborated**, and the chevron lists the members with distance and time apart.
+5. **False alarm.** Open one member, choose **False alarm**, add a note and confirm. The badge changes to ~~False Alarm~~, the cluster drops to ×2, and the dashboard's Corroborated and False alarms counts update.
+
 ## Manual test script
 
 1. **Submit a Critical report.** On `/report`, pick **Building Collapse**.
