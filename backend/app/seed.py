@@ -1,313 +1,330 @@
-"""Seed script to populate the database with sample data."""
-
-import sys
-import os
-
-# Ensure the backend directory is on the path so imports work
-sys.path.insert(0, os.path.dirname(os.path.dirname(os.path.abspath(__file__))))
-
+import json
 from datetime import datetime, timedelta, timezone
+from sqlalchemy.orm import Session
 
-from app.auth import hash_password
-from app.database import Base, SessionLocal, engine
-from app.models import (
-    Incident,
-    IncidentCategory,
-    IncidentSeverity,
-    IncidentStatus,
-    IncidentUpdate,
-    User,
-    UserRole,
-)
+from .auth import hash_password
+from .models import Category, Incident, IncidentStatusHistory, User
+from .severity import classify
+
+CATEGORIES_SEED_DATA = [
+    {"code": "FIRE", "name": "Fire Emergency", "icon": "🔥", "base_weight": 30},
+    {"code": "ROAD", "name": "Road Accident", "icon": "🚗", "base_weight": 20},
+    {"code": "MEDICAL", "name": "Medical Emergency", "icon": "❤️", "base_weight": 20},
+    {"code": "FLOOD", "name": "Flood", "icon": "🌊", "base_weight": 25},
+    {"code": "COLLAPSE", "name": "Building Collapse", "icon": "🏢", "base_weight": 35},
+    {"code": "OTHER", "name": "Other Emergencies", "icon": "⚠️", "base_weight": 10},
+]
+
+DEMO_INCIDENTS = [
+    {
+        "category_code": "COLLAPSE",
+        "title": "Commercial building collapse near Flower Bazaar",
+        "description": "Old 3-storey building collapsed, 10 people trapped under debris.",
+        "people_affected": 10,
+        "location": "Flower Bazaar, George Town, Chennai",
+        "latitude": 13.0902,
+        "longitude": 80.2810,
+        "contact_name": "Ravi Kumar",
+        "contact_phone": "9840123456",
+        "contact_email": "ravi.k@example.com",
+        "status": "In Progress",
+        "minutes_ago": 180,
+    },
+    {
+        "category_code": "FIRE",
+        "title": "Fire outbreak in textile showroom",
+        "description": "Electrical short circuit caused fire, smoke spreading to second floor.",
+        "people_affected": 3,
+        "location": "Usman Road, T. Nagar, Chennai",
+        "latitude": 13.0418,
+        "longitude": 80.2341,
+        "contact_name": "Kavitha S",
+        "contact_phone": "9841234567",
+        "contact_email": "kavitha.s@example.com",
+        "status": "Reported",
+        "minutes_ago": 15,
+    },
+    {
+        "category_code": "FLOOD",
+        "title": "Severe waterlogging in residential colony",
+        "description": "Lake breach causing rising water in residential colony, ground floor submerged.",
+        "people_affected": 25,
+        "location": "Ram Nagar, Velachery, Chennai",
+        "latitude": 12.9815,
+        "longitude": 80.2180,
+        "contact_name": "Senthil Nathan",
+        "contact_phone": "9842345678",
+        "contact_email": "senthil@example.com",
+        "status": "Pending",
+        "minutes_ago": 120,
+    },
+    {
+        "category_code": "ROAD",
+        "title": "Multi-vehicle collision near Sholinganallur junction",
+        "description": "Two cars and a bus minor collision, one injured with minor lacerations.",
+        "people_affected": 2,
+        "location": "OMR Sholinganallur Junction, Chennai",
+        "latitude": 12.9010,
+        "longitude": 80.2279,
+        "contact_name": "Anand M",
+        "contact_phone": "9843456789",
+        "contact_email": None,
+        "status": "In Progress",
+        "minutes_ago": 75,
+    },
+    {
+        "category_code": "MEDICAL",
+        "title": "Elderly resident experiencing acute distress",
+        "description": "Elderly patient having severe fever and dizziness, needs medical examination.",
+        "people_affected": 1,
+        "location": "Lattice Bridge Road, Adyar, Chennai",
+        "latitude": 13.0012,
+        "longitude": 80.2565,
+        "contact_name": "Meena R",
+        "contact_phone": "9844567890",
+        "contact_email": "meena.r@example.com",
+        "status": "Resolved",
+        "minutes_ago": 300,
+    },
+    {
+        "category_code": "ROAD",
+        "title": "Highway bus collision with heavy bleeding reported",
+        "description": "Intercity government bus overturned, passengers with heavy bleeding and fractures.",
+        "people_affected": 14,
+        "location": "GST Road near Guindy Kathipara, Chennai",
+        "latitude": 13.0067,
+        "longitude": 80.2025,
+        "contact_name": "Dinesh K",
+        "contact_phone": "9845678901",
+        "contact_email": None,
+        "status": "Reported",
+        "minutes_ago": 25,
+    },
+    {
+        "category_code": "OTHER",
+        "title": "Industrial ammonia chemical gas leak",
+        "description": "Storage cylinder ruptured, toxic gas leak spreading in surrounding area.",
+        "people_affected": 18,
+        "location": "Manali Industrial Belt, Chennai",
+        "latitude": 13.1702,
+        "longitude": 80.2612,
+        "contact_name": "Subramanian V",
+        "contact_phone": "9846789012",
+        "contact_email": "safety_manali@example.com",
+        "status": "In Progress",
+        "minutes_ago": 90,
+    },
+    {
+        "category_code": "COLLAPSE",
+        "title": "Compound wall collapsed onto pedestrian pathway",
+        "description": "Heavy monsoon rains caused boundary wall to fall, road partially blocked.",
+        "people_affected": 0,
+        "location": "Mudichur Road, West Tambaram, Chennai",
+        "latitude": 12.9249,
+        "longitude": 80.1000,
+        "contact_name": "Karthik P",
+        "contact_phone": "9847890123",
+        "contact_email": None,
+        "status": "Resolved",
+        "minutes_ago": 400,
+    },
+    {
+        "category_code": "MEDICAL",
+        "title": "Passenger unconscious on railway platform concourse",
+        "description": "Middle-aged traveler suddenly collapsed unconscious, cardiac symptoms suspected.",
+        "people_affected": 1,
+        "location": "MGR Central Railway Station Concourse, Chennai",
+        "latitude": 13.0827,
+        "longitude": 80.2755,
+        "contact_name": "RPF Duty Officer",
+        "contact_phone": "9848901234",
+        "contact_email": "rpf_central@example.com",
+        "status": "Pending",
+        "minutes_ago": 45,
+    },
+    {
+        "category_code": "FIRE",
+        "title": "LPG cylinder explosion in residential area",
+        "description": "Kitchen cylinder explosion, fire spreading rapidly and two people injured.",
+        "people_affected": 6,
+        "location": "Nochikuppam, Marina Beach Road, Chennai",
+        "latitude": 13.0336,
+        "longitude": 80.2785,
+        "contact_name": "Murugan S",
+        "contact_phone": "9849012345",
+        "contact_email": None,
+        "status": "Reported",
+        "minutes_ago": 10,
+    },
+    {
+        "category_code": "FLOOD",
+        "title": "Vehicles stuck in flooded subway underpass",
+        "description": "Subway water level reached 4 feet, two vehicles stuck with rising water.",
+        "people_affected": 4,
+        "location": "Pazhavanthangal Railway Subway, Chennai",
+        "latitude": 12.9881,
+        "longitude": 80.1873,
+        "contact_name": "Traffic Patrol 7",
+        "contact_phone": "9840112233",
+        "contact_email": None,
+        "status": "In Progress",
+        "minutes_ago": 60,
+    },
+    {
+        "category_code": "OTHER",
+        "title": "High tension electrical wire snapped on temple street",
+        "description": "Live electrical line snapped onto road after squall, traffic blocked.",
+        "people_affected": 0,
+        "location": "South Mada Street, Mylapore, Chennai",
+        "latitude": 13.0339,
+        "longitude": 80.2699,
+        "contact_name": "Vijayaraghavan G",
+        "contact_phone": "9840223344",
+        "contact_email": "v.raghavan@example.com",
+        "status": "Resolved",
+        "minutes_ago": 500,
+    },
+]
 
 
-def seed():
-    """Create sample users, incidents, and incident updates."""
-    # Create tables
-    Base.metadata.create_all(bind=engine)
+def seed_database(db: Session) -> None:
+    """Seed initial categories, admin user, and 12 realistic demo incidents if empty."""
+    # 1. Categories
+    category_map: dict[str, Category] = {}
+    for cat_data in CATEGORIES_SEED_DATA:
+        existing_cat = db.query(Category).filter(Category.code == cat_data["code"]).first()
+        if not existing_cat:
+            cat = Category(**cat_data)
+            db.add(cat)
+            db.flush()
+            category_map[cat.code] = cat
+        else:
+            category_map[existing_cat.code] = existing_cat
 
-    db = SessionLocal()
-    try:
-        # Skip if data already exists
-        if db.query(User).first():
-            print("Database already seeded. Skipping.")
-            return
-
-        now = datetime.now(timezone.utc)
-
-        # ── Users ─────────────────────────────────────────────────────────
-        admin = User(
-            username="admin",
-            email="admin@cobotex.com",
-            hashed_password=hash_password("admin123"),
-            role=UserRole.ADMIN,
-            created_at=now - timedelta(days=30),
+    # 2. Admin User
+    admin_email = "admin@codeclash.dev"
+    admin_user = db.query(User).filter(User.email == admin_email).first()
+    if not admin_user:
+        admin_user = User(
+            name="Admin User",
+            email=admin_email,
+            password_hash=hash_password("admin123"),
+            role="admin",
+            created_at=datetime.now(timezone.utc),
         )
-        responder1 = User(
-            username="responder1",
-            email="responder1@cobotex.com",
-            hashed_password=hash_password("resp123"),
-            role=UserRole.RESPONDER,
-            created_at=now - timedelta(days=25),
-        )
-        responder2 = User(
-            username="responder2",
-            email="responder2@cobotex.com",
-            hashed_password=hash_password("resp123"),
-            role=UserRole.RESPONDER,
-            created_at=now - timedelta(days=20),
-        )
-        reporter1 = User(
-            username="reporter1",
-            email="reporter1@cobotex.com",
-            hashed_password=hash_password("report123"),
-            role=UserRole.REPORTER,
-            created_at=now - timedelta(days=15),
-        )
-        reporter2 = User(
-            username="reporter2",
-            email="reporter2@cobotex.com",
-            hashed_password=hash_password("report123"),
-            role=UserRole.REPORTER,
-            created_at=now - timedelta(days=10),
-        )
-
-        users = [admin, responder1, responder2, reporter1, reporter2]
-        db.add_all(users)
-        db.flush()  # Get IDs assigned
-
-        # ── Incidents ─────────────────────────────────────────────────────
-        incidents = [
-            Incident(
-                title="Warehouse Fire on Industrial Ave",
-                description="Large fire reported at the warehouse complex on Industrial Avenue. Multiple units affected. Smoke visible from several blocks away.",
-                category=IncidentCategory.FIRE,
-                severity=IncidentSeverity.CRITICAL,
-                status=IncidentStatus.IN_PROGRESS,
-                latitude=40.7128,
-                longitude=-74.0060,
-                address="450 Industrial Ave, New York, NY 10001",
-                reporter_id=reporter1.id,
-                assigned_to_id=responder1.id,
-                created_at=now - timedelta(hours=3),
-                updated_at=now - timedelta(hours=1),
-            ),
-            Incident(
-                title="Flash Flooding on Main Street",
-                description="Heavy rainfall has caused flash flooding on Main Street. Water levels rising rapidly. Several vehicles stranded.",
-                category=IncidentCategory.FLOOD,
-                severity=IncidentSeverity.HIGH,
-                status=IncidentStatus.OPEN,
-                latitude=40.7580,
-                longitude=-73.9855,
-                address="200 Main Street, New York, NY 10036",
-                reporter_id=reporter2.id,
-                created_at=now - timedelta(hours=2),
-                updated_at=now - timedelta(hours=2),
-            ),
-            Incident(
-                title="Multi-Vehicle Collision on Highway 101",
-                description="Three-car pileup on Highway 101 northbound near exit 42. At least two injuries reported. Traffic backed up for miles.",
-                category=IncidentCategory.ACCIDENT,
-                severity=IncidentSeverity.HIGH,
-                status=IncidentStatus.IN_PROGRESS,
-                latitude=37.7749,
-                longitude=-122.4194,
-                address="Highway 101 NB, Exit 42, San Francisco, CA",
-                reporter_id=reporter1.id,
-                assigned_to_id=responder2.id,
-                created_at=now - timedelta(hours=5),
-                updated_at=now - timedelta(hours=3),
-            ),
-            Incident(
-                title="Gas Leak at Chemical Plant",
-                description="Potential hazardous gas leak detected at the chemical processing plant. Evacuation zone being established.",
-                category=IncidentCategory.HAZMAT,
-                severity=IncidentSeverity.CRITICAL,
-                status=IncidentStatus.OPEN,
-                latitude=34.0522,
-                longitude=-118.2437,
-                address="1200 Chemical Way, Los Angeles, CA 90015",
-                reporter_id=reporter2.id,
-                created_at=now - timedelta(hours=1),
-                updated_at=now - timedelta(hours=1),
-            ),
-            Incident(
-                title="Medical Emergency at City Park",
-                description="Individual collapsed in City Park near the fountain area. Bystanders performing CPR. Ambulance requested.",
-                category=IncidentCategory.MEDICAL,
-                severity=IncidentSeverity.HIGH,
-                status=IncidentStatus.RESOLVED,
-                latitude=41.8781,
-                longitude=-87.6298,
-                address="City Park, Chicago, IL 60601",
-                reporter_id=reporter1.id,
-                assigned_to_id=responder1.id,
-                created_at=now - timedelta(days=1),
-                updated_at=now - timedelta(hours=20),
-                resolved_at=now - timedelta(hours=20),
-            ),
-            Incident(
-                title="Minor Earthquake Tremor Felt Downtown",
-                description="A minor earthquake tremor (estimated 3.2 magnitude) was felt in the downtown area. No structural damage reported yet.",
-                category=IncidentCategory.EARTHQUAKE,
-                severity=IncidentSeverity.LOW,
-                status=IncidentStatus.CLOSED,
-                latitude=34.0195,
-                longitude=-118.4912,
-                address="Downtown, Santa Monica, CA 90401",
-                reporter_id=reporter2.id,
-                created_at=now - timedelta(days=3),
-                updated_at=now - timedelta(days=2),
-                resolved_at=now - timedelta(days=2),
-            ),
-            Incident(
-                title="Kitchen Fire in Residential Building",
-                description="Small kitchen fire reported on the 3rd floor of a residential building. Fire contained to one unit.",
-                category=IncidentCategory.FIRE,
-                severity=IncidentSeverity.MEDIUM,
-                status=IncidentStatus.RESOLVED,
-                latitude=40.7484,
-                longitude=-73.9857,
-                address="350 5th Ave, New York, NY 10118",
-                reporter_id=reporter1.id,
-                assigned_to_id=responder2.id,
-                created_at=now - timedelta(days=2),
-                updated_at=now - timedelta(days=1, hours=20),
-                resolved_at=now - timedelta(days=1, hours=20),
-            ),
-            Incident(
-                title="Suspicious Package Found Near Train Station",
-                description="Unattended package discovered near the entrance of Central Train Station. Area being cordoned off.",
-                category=IncidentCategory.OTHER,
-                severity=IncidentSeverity.MEDIUM,
-                status=IncidentStatus.CLOSED,
-                latitude=40.7527,
-                longitude=-73.9772,
-                address="Grand Central Terminal, New York, NY 10017",
-                reporter_id=reporter2.id,
-                assigned_to_id=responder1.id,
-                created_at=now - timedelta(days=5),
-                updated_at=now - timedelta(days=4),
-                resolved_at=now - timedelta(days=4),
-            ),
-            Incident(
-                title="Water Pipe Burst on Elm Street",
-                description="A major water pipe has burst on Elm Street causing flooding of the roadway and nearby basements.",
-                category=IncidentCategory.FLOOD,
-                severity=IncidentSeverity.MEDIUM,
-                status=IncidentStatus.IN_PROGRESS,
-                latitude=42.3601,
-                longitude=-71.0589,
-                address="75 Elm Street, Boston, MA 02108",
-                reporter_id=reporter1.id,
-                assigned_to_id=responder1.id,
-                created_at=now - timedelta(hours=8),
-                updated_at=now - timedelta(hours=6),
-            ),
-            Incident(
-                title="Slip and Fall at Shopping Mall",
-                description="Customer slipped on wet floor near food court. Possible ankle fracture. First aid applied on site.",
-                category=IncidentCategory.MEDICAL,
-                severity=IncidentSeverity.LOW,
-                status=IncidentStatus.RESOLVED,
-                latitude=33.7490,
-                longitude=-84.3880,
-                address="Peachtree Mall, Atlanta, GA 30303",
-                reporter_id=reporter2.id,
-                created_at=now - timedelta(days=1, hours=5),
-                updated_at=now - timedelta(days=1, hours=3),
-                resolved_at=now - timedelta(days=1, hours=3),
-            ),
-        ]
-
-        db.add_all(incidents)
+        db.add(admin_user)
         db.flush()
 
-        # ── Incident Updates (timeline entries) ───────────────────────────
-        updates = [
-            # Updates for Warehouse Fire
-            IncidentUpdate(
-                incident_id=incidents[0].id,
-                user_id=responder1.id,
-                message="Responding to location. ETA 5 minutes.",
-                status_change="IN_PROGRESS",
-                created_at=now - timedelta(hours=2, minutes=50),
-            ),
-            IncidentUpdate(
-                incident_id=incidents[0].id,
-                user_id=responder1.id,
-                message="Arrived on scene. Fire department is actively working to contain the blaze. Two buildings fully engulfed.",
-                created_at=now - timedelta(hours=2, minutes=30),
-            ),
-            IncidentUpdate(
-                incident_id=incidents[0].id,
-                user_id=admin.id,
-                message="Additional units dispatched. Evacuation perimeter expanded to 3 blocks.",
-                created_at=now - timedelta(hours=1),
-            ),
-            # Updates for Multi-Vehicle Collision
-            IncidentUpdate(
-                incident_id=incidents[2].id,
-                user_id=responder2.id,
-                message="En route to the scene. Highway patrol already on site.",
-                status_change="IN_PROGRESS",
-                created_at=now - timedelta(hours=4, minutes=45),
-            ),
-            IncidentUpdate(
-                incident_id=incidents[2].id,
-                user_id=responder2.id,
-                message="Two individuals transported to hospital with non-life-threatening injuries. Tow trucks clearing wreckage.",
-                created_at=now - timedelta(hours=3),
-            ),
-            # Updates for Medical Emergency
-            IncidentUpdate(
-                incident_id=incidents[4].id,
-                user_id=responder1.id,
-                message="Paramedics arrived. Patient is conscious and stable.",
-                status_change="IN_PROGRESS",
-                created_at=now - timedelta(hours=23),
-            ),
-            IncidentUpdate(
-                incident_id=incidents[4].id,
-                user_id=responder1.id,
-                message="Patient transported to hospital. Vitals stable. Incident resolved.",
-                status_change="RESOLVED",
-                created_at=now - timedelta(hours=20),
-            ),
-            # Updates for Water Pipe Burst
-            IncidentUpdate(
-                incident_id=incidents[8].id,
-                user_id=responder1.id,
-                message="Water utility team dispatched. Attempting to shut off main valve.",
-                status_change="IN_PROGRESS",
-                created_at=now - timedelta(hours=7),
-            ),
-        ]
+    db.commit()
 
-        db.add_all(updates)
-        db.commit()
+    # 3. Demo Incidents (only if incidents table is completely empty)
+    existing_incident_count = db.query(Incident).count()
+    if existing_incident_count > 0:
+        return
 
-        print("✅ Database seeded successfully!")
-        print(f"   Users: {len(users)}")
-        print(f"   Incidents: {len(incidents)}")
-        print(f"   Incident Updates: {len(updates)}")
-        print()
-        print("   Login credentials:")
-        print("   ─────────────────")
-        print("   admin     / admin123   (ADMIN)")
-        print("   responder1 / resp123   (RESPONDER)")
-        print("   responder2 / resp123   (RESPONDER)")
-        print("   reporter1  / report123 (REPORTER)")
-        print("   reporter2  / report123 (REPORTER)")
+    now = datetime.now(timezone.utc)
 
-    except Exception as e:
-        db.rollback()
-        print(f"❌ Error seeding database: {e}")
-        raise
-    finally:
-        db.close()
+    for item in DEMO_INCIDENTS:
+        cat = category_map[item["category_code"]]
+        created_time = now - timedelta(minutes=item["minutes_ago"])
 
+        # ALWAYS compute severity via classify()
+        level, score, reasons = classify(
+            category_code=item["category_code"],
+            people=item["people_affected"],
+            title=item["title"],
+            description=item["description"],
+        )
 
-if __name__ == "__main__":
-    seed()
+        target_status = item["status"]
+        resolved_time = (created_time + timedelta(minutes=45)) if target_status == "Resolved" else None
+        updated_time = resolved_time if resolved_time else (created_time + timedelta(minutes=10))
+
+        incident = Incident(
+            title=item["title"],
+            description=item["description"],
+            category_id=cat.id,
+            location=item["location"],
+            latitude=item["latitude"],
+            longitude=item["longitude"],
+            people_affected=item["people_affected"],
+            contact_name=item["contact_name"],
+            contact_phone=item["contact_phone"],
+            contact_email=item["contact_email"],
+            severity=level,
+            severity_score=score,
+            severity_reasons=json.dumps(reasons),
+            severity_overridden=False,
+            status=target_status,
+            is_duplicate=False,
+            created_at=created_time,
+            updated_at=updated_time,
+            resolved_at=resolved_time,
+        )
+        db.add(incident)
+        db.flush()
+
+        incident.ref_code = f"ER-2026-{incident.id:04d}"
+
+        # Initial reported history log
+        h1 = IncidentStatusHistory(
+            incident_id=incident.id,
+            from_status=None,
+            to_status="Reported",
+            note="Initial report received from field",
+            changed_by=None,
+            changed_at=created_time,
+        )
+        db.add(h1)
+
+        # Transition history if status advanced beyond Reported
+        if target_status == "Pending":
+            h2 = IncidentStatusHistory(
+                incident_id=incident.id,
+                from_status="Reported",
+                to_status="Pending",
+                note="Assigned to dispatch queue for verification",
+                changed_by=admin_user.id,
+                changed_at=created_time + timedelta(minutes=5),
+            )
+            db.add(h2)
+        elif target_status == "In Progress":
+            h2 = IncidentStatusHistory(
+                incident_id=incident.id,
+                from_status="Reported",
+                to_status="Pending",
+                note="Assigned to dispatch queue",
+                changed_by=admin_user.id,
+                changed_at=created_time + timedelta(minutes=5),
+            )
+            h3 = IncidentStatusHistory(
+                incident_id=incident.id,
+                from_status="Pending",
+                to_status="In Progress",
+                note="Emergency response units deployed to scene",
+                changed_by=admin_user.id,
+                changed_at=created_time + timedelta(minutes=10),
+            )
+            db.add(h2)
+            db.add(h3)
+        elif target_status == "Resolved":
+            h2 = IncidentStatusHistory(
+                incident_id=incident.id,
+                from_status="Reported",
+                to_status="In Progress",
+                note="Emergency responders engaged on site",
+                changed_by=admin_user.id,
+                changed_at=created_time + timedelta(minutes=10),
+            )
+            h3 = IncidentStatusHistory(
+                incident_id=incident.id,
+                from_status="In Progress",
+                to_status="Resolved",
+                note="Situation stabilized and secured",
+                changed_by=admin_user.id,
+                changed_at=resolved_time,
+            )
+            db.add(h2)
+            db.add(h3)
+
+    db.commit()
