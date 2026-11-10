@@ -1,8 +1,7 @@
 from sqlalchemy import create_engine
-from sqlalchemy.ext.declarative import declarative_base
-from sqlalchemy.orm import sessionmaker
+from sqlalchemy.orm import declarative_base, sessionmaker
 
-SQLALCHEMY_DATABASE_URL = "sqlite:///./cobotex.db"
+SQLALCHEMY_DATABASE_URL = "sqlite:///./emergency.db"
 
 engine = create_engine(
     SQLALCHEMY_DATABASE_URL,
@@ -15,7 +14,7 @@ Base = declarative_base()
 
 
 def get_db():
-    """Dependency that provides a database session."""
+    """Dependency that provides an independent SQLAlchemy database session."""
     db = SessionLocal()
     try:
         yield db
