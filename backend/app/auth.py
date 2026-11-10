@@ -1,76 +1,71 @@
-from datetime import datetime, timedelta, timezone
+import hashlib
+import secrets
+from typing import Optional
 
-from fastapi import Depends, HTTPException, status
-from fastapi.security import OAuth2PasswordBearer
-from jose import JWTError, jwt
-from passlib.context import CryptContext
+from fastapi import Depends, Header, HTTPException, status
 from sqlalchemy.orm import Session
 
 from .database import get_db
 from .models import User
 
-SECRET_KEY = "cobotex-secret-key-change-in-production"
-ALGORITHM = "HS256"
-ACCESS_TOKEN_EXPIRE_HOURS = 24
+# In-memory dictionary mapping token string to user_id
+ACTIVE_TOKENS: dict[str, int] = {}
 
-pwd_context = CryptContext(schemes=["bcrypt"], deprecated="auto")
-oauth2_scheme = OAuth2PasswordBearer(tokenUrl="/auth/login")
+PASSWORD_SALT = "emergency_salt_codeclash_2026"
 
 
 def hash_password(password: str) -> str:
-    """Hash a plaintext password."""
-    return pwd_context.hash(password)
+    """Generate deterministic SHA-256 hash using salt without extra dependencies."""
+    salted = f"{PASSWORD_SALT}:{password}"
+    return hashlib.sha256(salted.encode("utf-8")).hexdigest()
 
 
-def verify_password(plain_password: str, hashed_password: str) -> bool:
-    """Verify a plaintext password against a hash."""
-    return pwd_context.verify(plain_password, hashed_password)
+def verify_password(plain_password: str, stored_hash: str) -> bool:
+    """Verify password by comparing hashes."""
+    return hash_password(plain_password) == stored_hash
 
 
-def create_access_token(data: dict) -> str:
-    """Create a JWT access token."""
-    to_encode = data.copy()
-    expire = datetime.now(timezone.utc) + timedelta(hours=ACCESS_TOKEN_EXPIRE_HOURS)
-    to_encode.update({"exp": expire})
-    return jwt.encode(to_encode, SECRET_KEY, algorithm=ALGORITHM)
+def generate_token(user_id: int) -> str:
+    """Generate a secure hex token and register it in memory."""
+    token = secrets.token_hex(24)
+    ACTIVE_TOKENS[token] = user_id
+    return token
 
 
-def verify_token(token: str) -> dict:
-    """Verify and decode a JWT token."""
-    try:
-        payload = jwt.decode(token, SECRET_KEY, algorithms=[ALGORITHM])
-        return payload
-    except JWTError:
-        raise HTTPException(
-            status_code=status.HTTP_401_UNAUTHORIZED,
-            detail="Invalid or expired token",
-            headers={"WWW-Authenticate": "Bearer"},
-        )
-
-
-async def get_current_user(
-    token: str = Depends(oauth2_scheme),
+def require_admin(
+    authorization: Optional[str] = Header(None),
     db: Session = Depends(get_db),
 ) -> User:
-    """Dependency to get the current authenticated user."""
-    payload = verify_token(token)
-    user_id: int | None = payload.get("sub")
-    if user_id is None:
+    """
+    FastAPI dependency to enforce admin role via Bearer token.
+    Raises 401 if token is missing, invalid, or user is not an admin.
+    """
+    if not authorization:
         raise HTTPException(
             status_code=status.HTTP_401_UNAUTHORIZED,
-            detail="Invalid token payload",
-            headers={"WWW-Authenticate": "Bearer"},
+            detail="Missing Authorization header",
         )
-    user = db.query(User).filter(User.id == int(user_id)).first()
-    if user is None:
+
+    parts = authorization.strip().split()
+    if len(parts) != 2 or parts[0].lower() != "bearer":
         raise HTTPException(
             status_code=status.HTTP_401_UNAUTHORIZED,
-            detail="User not found",
-            headers={"WWW-Authenticate": "Bearer"},
+            detail="Invalid Authorization header format. Expected 'Bearer <token>'",
         )
-    if not user.is_active:
+
+    token = parts[1]
+    user_id = ACTIVE_TOKENS.get(token)
+    if not user_id:
         raise HTTPException(
-            status_code=status.HTTP_403_FORBIDDEN,
-            detail="Inactive user",
+            status_code=status.HTTP_401_UNAUTHORIZED,
+            detail="Invalid or expired authentication token",
         )
+
+    user = db.query(User).filter(User.id == user_id).first()
+    if not user or user.role != "admin":
+        raise HTTPException(
+            status_code=status.HTTP_401_UNAUTHORIZED,
+            detail="Admin privileges required",
+        )
+
     return user
