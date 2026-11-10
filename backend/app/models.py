@@ -45,6 +45,16 @@ class User(Base):
     status_changes = relationship("IncidentStatusHistory", back_populates="user")
 
 
+class ReporterReputation(Base):
+    __tablename__ = "reporter_reputation"
+
+    device_hash = Column(String(64), primary_key=True)
+    total_reports = Column(Integer, default=0, nullable=False)
+    verified_count = Column(Integer, default=0, nullable=False)
+    false_alarm_count = Column(Integer, default=0, nullable=False)
+    last_report_at = Column(DateTime(timezone=True), default=utc_now, nullable=False)
+
+
 class Incident(Base):
     __tablename__ = "incidents"
 
@@ -56,18 +66,48 @@ class Incident(Base):
     location = Column(String(200), nullable=False)
     latitude = Column(Float, nullable=True)
     longitude = Column(Float, nullable=True)
+
+    # Location & Geocoding metadata
+    location_accuracy_m = Column(Float, nullable=True)
+    location_source = Column(String(20), default="manual", nullable=False)  # gps | manual | ip
+    location_mismatch_km = Column(Float, nullable=True)
+
     people_affected = Column(Integer, default=0, nullable=False)
     contact_name = Column(String(80), nullable=True)
     contact_phone = Column(String(15), nullable=True)
     contact_email = Column(String(120), nullable=True)
 
+    # Severity Engine fields
     severity = Column(String(20), nullable=False, index=True)  # Low | Medium | High | Critical
     severity_score = Column(Integer, nullable=False)
     severity_reasons = Column(Text, nullable=False, default="[]")  # JSON-encoded list of strings
     severity_overridden = Column(Boolean, default=False, nullable=False)
 
-    status = Column(String(20), default="Reported", nullable=False, index=True)  # Reported | Pending | In Progress | Resolved
+    # Status & Trust Layer
+    status = Column(String(20), default="Reported", nullable=False, index=True)  # Reported | Pending | In Progress | Resolved | False Alarm
     is_duplicate = Column(Boolean, default=False, nullable=False)
+
+    # Trust Score & Verification
+    trust_score = Column(Integer, default=50, nullable=False)
+    trust_reasons = Column(Text, default="[]", nullable=False)  # JSON-encoded list of strings
+    verification_status = Column(
+        String(20), default="Unverified", nullable=False, index=True
+    )  # Unverified | Corroborated | Verified | False Alarm
+
+    # Reporter & Network Hashing
+    device_hash = Column(String(64), nullable=True, index=True)
+    ip_hash = Column(String(64), nullable=True, index=True)
+    phone_given = Column(Boolean, default=False, nullable=False)
+    duplicate_of = Column(Integer, ForeignKey("incidents.id"), nullable=True)
+
+    # Corroboration & Clustering
+    cluster_id = Column(Integer, nullable=True, index=True)
+    cluster_size = Column(Integer, default=1, nullable=False)
+    cluster_people_affected = Column(Integer, nullable=True)
+
+    # LLM Plausibility Assessment
+    llm_assessment = Column(Text, nullable=True)
+    llm_checked_at = Column(DateTime(timezone=True), nullable=True)
 
     created_at = Column(DateTime(timezone=True), default=utc_now, nullable=False, index=True)
     updated_at = Column(DateTime(timezone=True), default=utc_now, onupdate=utc_now, nullable=False)
@@ -104,7 +144,6 @@ class IncidentStatusHistory(Base):
     @property
     def changed_by_name(self):
         return self.user.name if self.user else None
-
 
 
 Index("ix_incidents_created_at_desc", Incident.created_at.desc())

@@ -1,10 +1,13 @@
-import json
 from datetime import datetime, timedelta, timezone
+import hashlib
+import json
 from sqlalchemy.orm import Session
 
 from .auth import hash_password
-from .models import Category, Incident, IncidentStatusHistory, User
+from .models import Category, Incident, IncidentStatusHistory, ReporterReputation, User
+from .rate_limit import hash_identifier
 from .severity import classify
+from .trust import compute_trust
 
 CATEGORIES_SEED_DATA = [
     {"code": "FIRE", "name": "Fire Emergency", "icon": "🔥", "base_weight": 30},
@@ -15,180 +18,9 @@ CATEGORIES_SEED_DATA = [
     {"code": "OTHER", "name": "Other Emergencies", "icon": "⚠️", "base_weight": 10},
 ]
 
-DEMO_INCIDENTS = [
-    {
-        "category_code": "COLLAPSE",
-        "title": "Commercial building collapse near Flower Bazaar",
-        "description": "Old 3-storey building collapsed, 10 people trapped under debris.",
-        "people_affected": 10,
-        "location": "Flower Bazaar, George Town, Chennai",
-        "latitude": 13.0902,
-        "longitude": 80.2810,
-        "contact_name": "Ravi Kumar",
-        "contact_phone": "9840123456",
-        "contact_email": "ravi.k@example.com",
-        "status": "In Progress",
-        "minutes_ago": 180,
-    },
-    {
-        "category_code": "FIRE",
-        "title": "Fire outbreak in textile showroom",
-        "description": "Electrical short circuit caused fire, smoke spreading to second floor.",
-        "people_affected": 3,
-        "location": "Usman Road, T. Nagar, Chennai",
-        "latitude": 13.0418,
-        "longitude": 80.2341,
-        "contact_name": "Kavitha S",
-        "contact_phone": "9841234567",
-        "contact_email": "kavitha.s@example.com",
-        "status": "Reported",
-        "minutes_ago": 15,
-    },
-    {
-        "category_code": "FLOOD",
-        "title": "Severe waterlogging in residential colony",
-        "description": "Lake breach causing rising water in residential colony, ground floor submerged.",
-        "people_affected": 25,
-        "location": "Ram Nagar, Velachery, Chennai",
-        "latitude": 12.9815,
-        "longitude": 80.2180,
-        "contact_name": "Senthil Nathan",
-        "contact_phone": "9842345678",
-        "contact_email": "senthil@example.com",
-        "status": "Pending",
-        "minutes_ago": 120,
-    },
-    {
-        "category_code": "ROAD",
-        "title": "Multi-vehicle collision near Sholinganallur junction",
-        "description": "Two cars and a bus minor collision, one injured with minor lacerations.",
-        "people_affected": 2,
-        "location": "OMR Sholinganallur Junction, Chennai",
-        "latitude": 12.9010,
-        "longitude": 80.2279,
-        "contact_name": "Anand M",
-        "contact_phone": "9843456789",
-        "contact_email": None,
-        "status": "In Progress",
-        "minutes_ago": 75,
-    },
-    {
-        "category_code": "MEDICAL",
-        "title": "Elderly resident experiencing acute distress",
-        "description": "Elderly patient having severe fever and dizziness, needs medical examination.",
-        "people_affected": 1,
-        "location": "Lattice Bridge Road, Adyar, Chennai",
-        "latitude": 13.0012,
-        "longitude": 80.2565,
-        "contact_name": "Meena R",
-        "contact_phone": "9844567890",
-        "contact_email": "meena.r@example.com",
-        "status": "Resolved",
-        "minutes_ago": 300,
-    },
-    {
-        "category_code": "ROAD",
-        "title": "Highway bus collision with heavy bleeding reported",
-        "description": "Intercity government bus overturned, passengers with heavy bleeding and fractures.",
-        "people_affected": 14,
-        "location": "GST Road near Guindy Kathipara, Chennai",
-        "latitude": 13.0067,
-        "longitude": 80.2025,
-        "contact_name": "Dinesh K",
-        "contact_phone": "9845678901",
-        "contact_email": None,
-        "status": "Reported",
-        "minutes_ago": 25,
-    },
-    {
-        "category_code": "OTHER",
-        "title": "Industrial ammonia chemical gas leak",
-        "description": "Storage cylinder ruptured, toxic gas leak spreading in surrounding area.",
-        "people_affected": 18,
-        "location": "Manali Industrial Belt, Chennai",
-        "latitude": 13.1702,
-        "longitude": 80.2612,
-        "contact_name": "Subramanian V",
-        "contact_phone": "9846789012",
-        "contact_email": "safety_manali@example.com",
-        "status": "In Progress",
-        "minutes_ago": 90,
-    },
-    {
-        "category_code": "COLLAPSE",
-        "title": "Compound wall collapsed onto pedestrian pathway",
-        "description": "Heavy monsoon rains caused boundary wall to fall, road partially blocked.",
-        "people_affected": 0,
-        "location": "Mudichur Road, West Tambaram, Chennai",
-        "latitude": 12.9249,
-        "longitude": 80.1000,
-        "contact_name": "Karthik P",
-        "contact_phone": "9847890123",
-        "contact_email": None,
-        "status": "Resolved",
-        "minutes_ago": 400,
-    },
-    {
-        "category_code": "MEDICAL",
-        "title": "Passenger unconscious on railway platform concourse",
-        "description": "Middle-aged traveler suddenly collapsed unconscious, cardiac symptoms suspected.",
-        "people_affected": 1,
-        "location": "MGR Central Railway Station Concourse, Chennai",
-        "latitude": 13.0827,
-        "longitude": 80.2755,
-        "contact_name": "RPF Duty Officer",
-        "contact_phone": "9848901234",
-        "contact_email": "rpf_central@example.com",
-        "status": "Pending",
-        "minutes_ago": 45,
-    },
-    {
-        "category_code": "FIRE",
-        "title": "LPG cylinder explosion in residential area",
-        "description": "Kitchen cylinder explosion, fire spreading rapidly and two people injured.",
-        "people_affected": 6,
-        "location": "Nochikuppam, Marina Beach Road, Chennai",
-        "latitude": 13.0336,
-        "longitude": 80.2785,
-        "contact_name": "Murugan S",
-        "contact_phone": "9849012345",
-        "contact_email": None,
-        "status": "Reported",
-        "minutes_ago": 10,
-    },
-    {
-        "category_code": "FLOOD",
-        "title": "Vehicles stuck in flooded subway underpass",
-        "description": "Subway water level reached 4 feet, two vehicles stuck with rising water.",
-        "people_affected": 4,
-        "location": "Pazhavanthangal Railway Subway, Chennai",
-        "latitude": 12.9881,
-        "longitude": 80.1873,
-        "contact_name": "Traffic Patrol 7",
-        "contact_phone": "9840112233",
-        "contact_email": None,
-        "status": "In Progress",
-        "minutes_ago": 60,
-    },
-    {
-        "category_code": "OTHER",
-        "title": "High tension electrical wire snapped on temple street",
-        "description": "Live electrical line snapped onto road after squall, traffic blocked.",
-        "people_affected": 0,
-        "location": "South Mada Street, Mylapore, Chennai",
-        "latitude": 13.0339,
-        "longitude": 80.2699,
-        "contact_name": "Vijayaraghavan G",
-        "contact_phone": "9840223344",
-        "contact_email": "v.raghavan@example.com",
-        "status": "Resolved",
-        "minutes_ago": 500,
-    },
-]
-
 
 def seed_database(db: Session) -> None:
-    """Seed initial categories, admin user, and 12 realistic demo incidents if empty."""
+    """Seed initial categories, admin user, and demo incidents including Corroborated clusters and Suspicious reports."""
     # 1. Categories
     category_map: dict[str, Category] = {}
     for cat_data in CATEGORIES_SEED_DATA:
@@ -217,114 +49,299 @@ def seed_database(db: Session) -> None:
 
     db.commit()
 
-    # 3. Demo Incidents (only if incidents table is completely empty)
-    existing_incident_count = db.query(Incident).count()
-    if existing_incident_count > 0:
+    # 3. Check if incidents already exist
+    if db.query(Incident).count() > 0:
         return
 
     now = datetime.now(timezone.utc)
+    flood_cat = category_map["FLOOD"]
+    fire_cat = category_map["FIRE"]
+    collapse_cat = category_map["COLLAPSE"]
+    road_cat = category_map["ROAD"]
+    medical_cat = category_map["MEDICAL"]
+    other_cat = category_map["OTHER"]
 
-    for item in DEMO_INCIDENTS:
-        cat = category_map[item["category_code"]]
-        created_time = now - timedelta(minutes=item["minutes_ago"])
+    # =======================================================================
+    # CLUSTER 1: 3 Corroborating FLOOD Reports in Velachery (within 300m & 20 min)
+    # =======================================================================
+    dev_hash_a = hash_identifier("device_velachery_1")
+    dev_hash_b = hash_identifier("device_velachery_2")
+    dev_hash_c = hash_identifier("device_velachery_3")
+    ip_hash_a = hash_identifier("192.168.1.10")
+    ip_hash_b = hash_identifier("192.168.1.20")
+    ip_hash_c = hash_identifier("192.168.1.30")
 
-        # ALWAYS compute severity via classify()
-        level, score, reasons = classify(
-            category_code=item["category_code"],
-            people=item["people_affected"],
-            title=item["title"],
-            description=item["description"],
-        )
+    # Member 1 (Cluster Root)
+    f1_time = now - timedelta(minutes=25)
+    f1_lvl, f1_score, f1_reasons = classify("FLOOD", 25, "Lake breach flooding residential colony", "Water rising rapidly inside ground floor homes, elderly stuck")
+    f1_trust, f1_tr_reasons = compute_trust(phone_given=True, location_accuracy_m=35.0, corroborating_count=2, description_length=75)
 
-        target_status = item["status"]
-        resolved_time = (created_time + timedelta(minutes=45)) if target_status == "Resolved" else None
-        updated_time = resolved_time if resolved_time else (created_time + timedelta(minutes=10))
+    flood_root = Incident(
+        title="Lake breach flooding residential colony",
+        description="Water rising rapidly inside ground floor homes, elderly stuck",
+        category_id=flood_cat.id,
+        location="Ram Nagar 6th Street, Velachery, Chennai",
+        latitude=12.9815,
+        longitude=80.2180,
+        location_accuracy_m=35.0,
+        location_source="gps",
+        people_affected=25,
+        contact_name="Senthil Nathan",
+        contact_phone="9842345678",
+        severity=f1_lvl,
+        severity_score=f1_score,
+        severity_reasons=json.dumps(f1_reasons + ["escalated from cluster of 3 reports", "multiple witnesses"]),
+        status="In Progress",
+        trust_score=f1_trust,
+        trust_reasons=json.dumps(f1_tr_reasons),
+        verification_status="Corroborated",
+        device_hash=dev_hash_a,
+        ip_hash=ip_hash_a,
+        phone_given=True,
+        cluster_size=3,
+        cluster_people_affected=30,
+        created_at=f1_time,
+        updated_at=f1_time,
+    )
+    db.add(flood_root)
+    db.flush()
+    flood_root.ref_code = f"ER-2026-{flood_root.id:04d}"
+    flood_root.cluster_id = flood_root.id
 
-        incident = Incident(
-            title=item["title"],
-            description=item["description"],
-            category_id=cat.id,
-            location=item["location"],
-            latitude=item["latitude"],
-            longitude=item["longitude"],
-            people_affected=item["people_affected"],
-            contact_name=item["contact_name"],
-            contact_phone=item["contact_phone"],
-            contact_email=item["contact_email"],
-            severity=level,
-            severity_score=score,
-            severity_reasons=json.dumps(reasons),
-            severity_overridden=False,
-            status=target_status,
-            is_duplicate=False,
-            created_at=created_time,
-            updated_at=updated_time,
-            resolved_at=resolved_time,
-        )
-        db.add(incident)
-        db.flush()
+    # Member 2 (180m away, 8 min later, 30 people)
+    f2_time = now - timedelta(minutes=17)
+    f2_lvl, f2_score, f2_reasons = classify("FLOOD", 30, "Severe street waterlogging near Ram Nagar park", "Entire residential street inundated, 30 people affected with rising water")
+    f2_trust, f2_tr_reasons = compute_trust(phone_given=True, location_accuracy_m=50.0, corroborating_count=2, description_length=70)
 
-        incident.ref_code = f"ER-2026-{incident.id:04d}"
+    flood_m2 = Incident(
+        title="Severe street waterlogging near Ram Nagar park",
+        description="Entire residential street inundated, 30 people affected with rising water",
+        category_id=flood_cat.id,
+        location="Ram Nagar Main Road, Velachery, Chennai",
+        latitude=12.9825,
+        longitude=80.2192,
+        location_accuracy_m=50.0,
+        location_source="gps",
+        people_affected=30,
+        contact_name="Ganesh V",
+        contact_phone="9842112233",
+        severity=f2_lvl,
+        severity_score=f2_score,
+        severity_reasons=json.dumps(f2_reasons),
+        status="In Progress",
+        trust_score=f2_trust,
+        trust_reasons=json.dumps(f2_tr_reasons),
+        verification_status="Corroborated",
+        device_hash=dev_hash_b,
+        ip_hash=ip_hash_b,
+        phone_given=True,
+        cluster_id=flood_root.id,
+        cluster_size=3,
+        cluster_people_affected=30,
+        created_at=f2_time,
+        updated_at=f2_time,
+    )
+    db.add(flood_m2)
+    db.flush()
+    flood_m2.ref_code = f"ER-2026-{flood_m2.id:04d}"
 
-        # Initial reported history log
-        h1 = IncidentStatusHistory(
-            incident_id=incident.id,
+    # Member 3 (240m away, 14 min later, 20 people)
+    f3_time = now - timedelta(minutes=11)
+    f3_lvl, f3_score, f3_reasons = classify("FLOOD", 20, "Water level reaching waist height in residential apartments", "Cars submerged, water rising continuously from overflowing drain")
+    f3_trust, f3_tr_reasons = compute_trust(phone_given=False, location_accuracy_m=65.0, corroborating_count=2, description_length=68)
+
+    flood_m3 = Incident(
+        title="Water level reaching waist height in residential apartments",
+        description="Cars submerged, water rising continuously from overflowing drain",
+        category_id=flood_cat.id,
+        location="Ram Nagar 4th Cross, Velachery, Chennai",
+        latitude=12.9808,
+        longitude=80.2173,
+        location_accuracy_m=65.0,
+        location_source="gps",
+        people_affected=20,
+        contact_name=None,
+        contact_phone=None,
+        severity=f3_lvl,
+        severity_score=f3_score,
+        severity_reasons=json.dumps(f3_reasons),
+        status="In Progress",
+        trust_score=f3_trust,
+        trust_reasons=json.dumps(f3_tr_reasons),
+        verification_status="Corroborated",
+        device_hash=dev_hash_c,
+        ip_hash=ip_hash_c,
+        phone_given=False,
+        cluster_id=flood_root.id,
+        cluster_size=3,
+        cluster_people_affected=30,
+        created_at=f3_time,
+        updated_at=f3_time,
+    )
+    db.add(flood_m3)
+    db.flush()
+    flood_m3.ref_code = f"ER-2026-{flood_m3.id:04d}"
+
+    # =======================================================================
+    # DUPLICATE REPORT: Same device as Member 1, near-identical text
+    # =======================================================================
+    dup_time = now - timedelta(minutes=14)
+    dup_trust, dup_tr_reasons = compute_trust(
+        phone_given=True,
+        is_duplicate=True,
+        duplicate_ref=flood_root.ref_code,
+        description_length=65,
+    )
+    flood_dup = Incident(
+        title="Lake breach flooding residential colony again",
+        description="Water rising rapidly inside ground floor homes, please hurry",
+        category_id=flood_cat.id,
+        location="Ram Nagar 6th Street, Velachery, Chennai",
+        latitude=12.9815,
+        longitude=80.2180,
+        location_accuracy_m=40.0,
+        location_source="gps",
+        people_affected=25,
+        contact_name="Senthil Nathan",
+        contact_phone="9842345678",
+        severity=f1_lvl,
+        severity_score=f1_score,
+        severity_reasons=json.dumps(["Duplicate submission from same device"]),
+        status="Reported",
+        is_duplicate=True,
+        duplicate_of=flood_root.id,
+        trust_score=dup_trust,
+        trust_reasons=json.dumps(dup_tr_reasons),
+        verification_status="Unverified",
+        device_hash=dev_hash_a,  # Same device!
+        ip_hash=ip_hash_a,
+        phone_given=True,
+        cluster_id=flood_root.id,
+        cluster_size=3,
+        cluster_people_affected=30,
+        created_at=dup_time,
+        updated_at=dup_time,
+    )
+    db.add(flood_dup)
+    db.flush()
+    flood_dup.ref_code = f"ER-2026-{flood_dup.id:04d}"
+
+    # =======================================================================
+    # OBVIOUS GIBBERISH REPORT: "test asdf" (Ends up Suspicious, trust < 30)
+    # =======================================================================
+    gib_time = now - timedelta(minutes=5)
+    gib_trust, gib_tr_reasons = compute_trust(
+        phone_given=False,
+        llm_assessment={"gibberish_or_test": True, "plausible": False, "confidence": 0.95},
+        description_length=12,
+    )
+    gib_inc = Incident(
+        title="test asdf",
+        description="asdf test 123",
+        category_id=other_cat.id,
+        location="unknown location",
+        people_affected=0,
+        severity="Low",
+        severity_score=10,
+        severity_reasons=json.dumps(["Other Emergencies base +10"]),
+        status="Reported",
+        trust_score=gib_trust,  # 50 - 30 - 10 = 10 -> Suspicious (<30)
+        trust_reasons=json.dumps(gib_tr_reasons),
+        verification_status="Unverified",
+        device_hash=hash_identifier("spammer_device"),
+        ip_hash=hash_identifier("10.0.0.99"),
+        phone_given=False,
+        created_at=gib_time,
+        updated_at=gib_time,
+    )
+    db.add(gib_inc)
+    db.flush()
+    gib_inc.ref_code = f"ER-2026-{gib_inc.id:04d}"
+    gib_inc.cluster_id = gib_inc.id
+
+    # =======================================================================
+    # LONE FIRE REPORT: Stays Unverified
+    # =======================================================================
+    fire_time = now - timedelta(minutes=40)
+    fire_lvl, fire_score, fire_reasons = classify("FIRE", 3, "Fire outbreak in showroom", "smoke spreading to second floor")
+    fire_trust, fire_tr_reasons = compute_trust(phone_given=True, description_length=50)
+    fire_inc = Incident(
+        title="Fire outbreak in textile showroom",
+        description="Electrical short circuit caused fire, smoke spreading to second floor",
+        category_id=fire_cat.id,
+        location="Usman Road, T. Nagar, Chennai",
+        latitude=13.0418,
+        longitude=80.2341,
+        location_accuracy_m=55.0,
+        location_source="gps",
+        people_affected=3,
+        contact_name="Kavitha S",
+        contact_phone="9841234567",
+        severity=fire_lvl,
+        severity_score=fire_score,
+        severity_reasons=json.dumps(fire_reasons),
+        status="Reported",
+        trust_score=fire_trust,
+        trust_reasons=json.dumps(fire_tr_reasons),
+        verification_status="Unverified",
+        device_hash=hash_identifier("device_tnagar"),
+        ip_hash=hash_identifier("192.168.1.50"),
+        phone_given=True,
+        created_at=fire_time,
+        updated_at=fire_time,
+    )
+    db.add(fire_inc)
+    db.flush()
+    fire_inc.ref_code = f"ER-2026-{fire_inc.id:04d}"
+    fire_inc.cluster_id = fire_inc.id
+
+    # =======================================================================
+    # CRITICAL COLLAPSE: Verified Building Collapse with 10 people trapped
+    # =======================================================================
+    col_time = now - timedelta(minutes=90)
+    col_lvl, col_score, col_reasons = classify("COLLAPSE", 10, "Commercial building collapsed", "10 people trapped under concrete debris")
+    col_trust, col_tr_reasons = compute_trust(phone_given=True, location_accuracy_m=20.0, description_length=60)
+    collapse_inc = Incident(
+        title="Commercial building collapse near Flower Bazaar",
+        description="Old 3-storey building collapsed, 10 people trapped under debris",
+        category_id=collapse_cat.id,
+        location="Flower Bazaar, George Town, Chennai",
+        latitude=13.0902,
+        longitude=80.2810,
+        location_accuracy_m=20.0,
+        location_source="gps",
+        people_affected=10,
+        contact_name="Ravi Kumar",
+        contact_phone="9840123456",
+        contact_email="ravi.k@example.com",
+        severity=col_lvl,
+        severity_score=col_score,
+        severity_reasons=json.dumps(col_reasons),
+        status="In Progress",
+        trust_score=col_trust + 20,
+        trust_reasons=json.dumps(col_tr_reasons + ["Manually verified by district supervisor +20"]),
+        verification_status="Verified",
+        device_hash=hash_identifier("device_georgetown"),
+        ip_hash=hash_identifier("192.168.1.60"),
+        phone_given=True,
+        created_at=col_time,
+        updated_at=col_time,
+    )
+    db.add(collapse_inc)
+    db.flush()
+    collapse_inc.ref_code = f"ER-2026-{collapse_inc.id:04d}"
+    collapse_inc.cluster_id = collapse_inc.id
+
+    # Seed initial status history entries for all
+    for inc in [flood_root, flood_m2, flood_m3, flood_dup, gib_inc, fire_inc, collapse_inc]:
+        h = IncidentStatusHistory(
+            incident_id=inc.id,
             from_status=None,
-            to_status="Reported",
-            note="Initial report received from field",
+            to_status=inc.status,
+            note="Seeded incident entry",
             changed_by=None,
-            changed_at=created_time,
+            changed_at=inc.created_at,
         )
-        db.add(h1)
-
-        # Transition history if status advanced beyond Reported
-        if target_status == "Pending":
-            h2 = IncidentStatusHistory(
-                incident_id=incident.id,
-                from_status="Reported",
-                to_status="Pending",
-                note="Assigned to dispatch queue for verification",
-                changed_by=admin_user.id,
-                changed_at=created_time + timedelta(minutes=5),
-            )
-            db.add(h2)
-        elif target_status == "In Progress":
-            h2 = IncidentStatusHistory(
-                incident_id=incident.id,
-                from_status="Reported",
-                to_status="Pending",
-                note="Assigned to dispatch queue",
-                changed_by=admin_user.id,
-                changed_at=created_time + timedelta(minutes=5),
-            )
-            h3 = IncidentStatusHistory(
-                incident_id=incident.id,
-                from_status="Pending",
-                to_status="In Progress",
-                note="Emergency response units deployed to scene",
-                changed_by=admin_user.id,
-                changed_at=created_time + timedelta(minutes=10),
-            )
-            db.add(h2)
-            db.add(h3)
-        elif target_status == "Resolved":
-            h2 = IncidentStatusHistory(
-                incident_id=incident.id,
-                from_status="Reported",
-                to_status="In Progress",
-                note="Emergency responders engaged on site",
-                changed_by=admin_user.id,
-                changed_at=created_time + timedelta(minutes=10),
-            )
-            h3 = IncidentStatusHistory(
-                incident_id=incident.id,
-                from_status="In Progress",
-                to_status="Resolved",
-                note="Situation stabilized and secured",
-                changed_by=admin_user.id,
-                changed_at=resolved_time,
-            )
-            db.add(h2)
-            db.add(h3)
+        db.add(h)
 
     db.commit()
