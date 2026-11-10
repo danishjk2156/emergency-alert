@@ -21,27 +21,40 @@ from ..database import get_db
 from ..enrich import enrich_incident
 from ..gemini_triage import classify_with_gemini
 from ..geo import haversine_distance_km
-from ..models import Category, Incident, IncidentStatusHistory, ReporterReputation, User, utc_now
+from ..models import Category, Incident, IncidentStatusHistory, ReporterReputation, ResponseTeam, User, utc_now
 from ..rate_limit import get_client_hashes, rate_limit_report
 from ..schemas import (
     AIAnalysisResponse,
     AIClassifyRequest,
+    AssignTeamRequest,
     CategoryNested,
     IncidentCreate,
     IncidentDetailResponse,
     IncidentListResponse,
     IncidentResponse,
     IncidentTrackResponse,
+    PrioritizedIncidentResponse,
     RelatedIncidentItem,
     RelatedIncidentsResponse,
     SeverityUpdateRequest,
     StatusUpdateRequest,
+    TeamWithDistance,
     VerifyRequest,
 )
+from ..services.priority import compute_priority
 from ..severity import classify
 from ..trust import compute_trust
 
 router = APIRouter(prefix="/incidents", tags=["Incidents"])
+
+CATEGORY_TO_TEAM_MAPPING = {
+    "FIRE": ["Fire"],
+    "MEDICAL": ["Medical"],
+    "COLLAPSE": ["Rescue", "Fire"],
+    "FLOOD": ["Rescue"],
+    "ROAD": ["Medical", "Rescue", "Police"],
+    "OTHER": ["Fire", "Medical", "Rescue", "Police"],
+}
 
 
 @router.post("/ai-classify", response_model=AIAnalysisResponse)
@@ -346,6 +359,48 @@ def list_incidents(
     return IncidentListResponse(items=responses, total=total)
 
 
+@router.get("/prioritized", response_model=list[PrioritizedIncidentResponse])
+def get_prioritized_incidents(
+    current_admin: User = Depends(require_admin),
+    db: Session = Depends(get_db),
+):
+    """
+    Priority ranking endpoint:
+    Returns all active emergencies (excluding duplicates, Resolved, False Alarm)
+    ranked live using the multi-factor explainable Priority Engine.
+    """
+    active_incidents = (
+        db.query(Incident)
+        .filter(
+            Incident.is_duplicate == False,
+            Incident.status.notin_(["Resolved", "False Alarm"]),
+        )
+        .all()
+    )
+
+    scored_items = []
+    for inc in active_incidents:
+        p_res = compute_priority(inc, inc.category)
+        scored_items.append((inc, p_res))
+
+    # Sort descending by priority score
+    scored_items.sort(key=lambda x: x[1]["score"], reverse=True)
+
+    results = []
+    for rank_idx, (inc, p_res) in enumerate(scored_items, start=1):
+        resp = IncidentResponse.model_validate(inc)
+        p_obj = PrioritizedIncidentResponse(
+            **resp.model_dump(),
+            priority_score=p_res["score"],
+            priority_label=p_res["label"],
+            priority_breakdown=p_res["breakdown"],
+            rank=rank_idx,
+        )
+        results.append(p_obj)
+
+    return results
+
+
 @router.get("/{incident_id}", response_model=IncidentDetailResponse)
 def get_incident_detail(
     incident_id: int,
@@ -446,6 +501,223 @@ def get_related_incidents(
     )
 
 
+@router.get("/{incident_id}/nearest-teams", response_model=list[TeamWithDistance])
+def get_nearest_teams(
+    incident_id: int,
+    current_admin: User = Depends(require_admin),
+    db: Session = Depends(get_db),
+):
+    """
+    Calculate and return available suitable response teams sorted by distance (km) and ETA.
+    """
+    incident = db.query(Incident).filter(Incident.id == incident_id).first()
+    if not incident:
+        raise HTTPException(status_code=404, detail="Incident not found")
+
+    if incident.latitude is None or incident.longitude is None:
+        raise HTTPException(
+            status_code=status.HTTP_400_BAD_REQUEST,
+            detail="Incident does not have latitude/longitude coordinates",
+        )
+
+    cat_code = incident.category.code.upper() if incident.category else "OTHER"
+    suitable_cats = CATEGORY_TO_TEAM_MAPPING.get(cat_code, ["Fire", "Medical", "Rescue", "Police"])
+
+    available_teams = (
+        db.query(ResponseTeam)
+        .filter(
+            ResponseTeam.availability == "Available",
+            ResponseTeam.category.in_(suitable_cats),
+        )
+        .all()
+    )
+
+    results = []
+    for team in available_teams:
+        dist_km = round(
+            haversine_distance_km(
+                incident.latitude,
+                incident.longitude,
+                team.latitude,
+                team.longitude,
+            ),
+            2,
+        )
+        # Dispatch speed 40 km/h: (distance / 40) * 60 minutes
+        eta_min = max(1, int(round((dist_km / 40.0) * 60.0)))
+        results.append(
+            TeamWithDistance(
+                id=team.id,
+                code=team.code,
+                name=team.name,
+                category=team.category,
+                latitude=team.latitude,
+                longitude=team.longitude,
+                location_label=team.location_label,
+                availability=team.availability,
+                current_incident_id=team.current_incident_id,
+                current_incident=None,
+                updated_at=team.updated_at,
+                distance_km=dist_km,
+                eta_minutes=eta_min,
+            )
+        )
+
+    results.sort(key=lambda t: t.distance_km)
+    return results
+
+
+@router.post("/{incident_id}/assign", response_model=IncidentDetailResponse)
+def assign_team_to_incident(
+    incident_id: int,
+    payload: AssignTeamRequest = AssignTeamRequest(),
+    current_admin: User = Depends(require_admin),
+    db: Session = Depends(get_db),
+):
+    """
+    Assign a response unit to an incident in a single atomic transaction.
+    If team_id is omitted, automatically assigns the nearest suitable available unit.
+    """
+    incident = db.query(Incident).filter(Incident.id == incident_id).first()
+    if not incident:
+        raise HTTPException(status_code=404, detail="Incident not found")
+
+    if incident.status != "Reported":
+        raise HTTPException(
+            status_code=status.HTTP_400_BAD_REQUEST,
+            detail=f"Cannot assign team: incident status is '{incident.status}', expected 'Reported'",
+        )
+
+    team: Optional[ResponseTeam] = None
+    if payload.team_id is not None:
+        team = db.query(ResponseTeam).filter(ResponseTeam.id == payload.team_id).first()
+        if not team:
+            raise HTTPException(status_code=404, detail=f"Response team with ID {payload.team_id} not found")
+        if team.availability != "Available":
+            raise HTTPException(
+                status_code=status.HTTP_409_CONFLICT,
+                detail=f"Team '{team.name}' ({team.code}) is already Busy",
+            )
+    else:
+        if incident.latitude is None or incident.longitude is None:
+            raise HTTPException(
+                status_code=status.HTTP_400_BAD_REQUEST,
+                detail="Incident lacks coordinates for auto-assignment. Provide team_id explicitly.",
+            )
+
+        cat_code = incident.category.code.upper() if incident.category else "OTHER"
+        suitable_cats = CATEGORY_TO_TEAM_MAPPING.get(cat_code, ["Fire", "Medical", "Rescue", "Police"])
+
+        available_teams = (
+            db.query(ResponseTeam)
+            .filter(
+                ResponseTeam.availability == "Available",
+                ResponseTeam.category.in_(suitable_cats),
+            )
+            .all()
+        )
+        if not available_teams:
+            raise HTTPException(
+                status_code=status.HTTP_409_CONFLICT,
+                detail=f"No available teams found for category '{cat_code}'",
+            )
+
+        available_teams.sort(
+            key=lambda t: haversine_distance_km(
+                incident.latitude, incident.longitude, t.latitude, t.longitude
+            )
+        )
+        team = available_teams[0]
+
+    dist_km = None
+    eta_min = None
+    if (
+        incident.latitude is not None
+        and incident.longitude is not None
+        and team.latitude is not None
+        and team.longitude is not None
+    ):
+        dist_km = round(
+            haversine_distance_km(
+                incident.latitude, incident.longitude, team.latitude, team.longitude
+            ),
+            2,
+        )
+        eta_min = max(1, int(round((dist_km / 40.0) * 60.0)))
+
+    now = utc_now()
+
+    incident.status = "Assigned"
+    incident.assigned_team_id = team.id
+    incident.assigned_at = now
+    incident.assignment_distance_km = dist_km
+    incident.eta_minutes = eta_min
+    incident.updated_at = now
+
+    team.availability = "Busy"
+    team.current_incident_id = incident.id
+    team.updated_at = now
+
+    history_entry = IncidentStatusHistory(
+        incident_id=incident.id,
+        from_status="Reported",
+        to_status="Assigned",
+        note=f"Assigned to {team.code} ({team.name})",
+        changed_by=current_admin.id,
+        changed_at=now,
+    )
+    db.add(history_entry)
+    db.commit()
+    db.refresh(incident)
+
+    return incident
+
+
+@router.post("/{incident_id}/unassign", response_model=IncidentDetailResponse)
+def unassign_team_from_incident(
+    incident_id: int,
+    current_admin: User = Depends(require_admin),
+    db: Session = Depends(get_db),
+):
+    """
+    Unassign the response team: frees the unit and transitions incident back to Reported.
+    """
+    incident = db.query(Incident).filter(Incident.id == incident_id).first()
+    if not incident:
+        raise HTTPException(status_code=404, detail="Incident not found")
+
+    team = incident.assigned_team
+    team_code = team.code if team else None
+
+    now = utc_now()
+    if team:
+        team.availability = "Available"
+        team.current_incident_id = None
+        team.updated_at = now
+
+    from_st = incident.status
+    incident.status = "Reported"
+    incident.assigned_team_id = None
+    incident.assigned_at = None
+    incident.assignment_distance_km = None
+    incident.eta_minutes = None
+    incident.updated_at = now
+
+    history_entry = IncidentStatusHistory(
+        incident_id=incident.id,
+        from_status=from_st,
+        to_status="Reported",
+        note=f"Unassigned from {team_code}" if team_code else "Unassigned from team",
+        changed_by=current_admin.id,
+        changed_at=now,
+    )
+    db.add(history_entry)
+    db.commit()
+    db.refresh(incident)
+
+    return incident
+
+
 @router.patch("/{incident_id}/status", response_model=IncidentDetailResponse)
 def update_incident_status(
     incident_id: int,
@@ -453,7 +725,12 @@ def update_incident_status(
     current_admin: User = Depends(require_admin),
     db: Session = Depends(get_db),
 ):
-    """Admin status transition endpoint logging audit history."""
+    """
+    Admin status transition endpoint logging audit history.
+    Enforces valid lifecycle transitions: Reported -> Assigned -> In Progress -> Resolved.
+    False Alarm is allowed from any non-terminal status.
+    Frees assigned team on Resolved or False Alarm.
+    """
     incident = db.query(Incident).filter(Incident.id == incident_id).first()
     if not incident:
         raise HTTPException(status_code=404, detail="Incident not found")
@@ -462,11 +739,39 @@ def update_incident_status(
     new_status = payload.status
     now = utc_now()
 
+    ALLOWED_TRANSITIONS = {
+        "Reported": {"Assigned", "False Alarm"},
+        "Assigned": {"In Progress", "False Alarm"},
+        "In Progress": {"Resolved", "False Alarm"},
+        "Resolved": set(),
+        "False Alarm": set(),
+        "Pending": {"Reported", "Assigned", "In Progress", "Resolved", "False Alarm"},
+    }
+
+    if old_status == new_status:
+        raise HTTPException(
+            status_code=status.HTTP_400_BAD_REQUEST,
+            detail=f"Incident is already in '{new_status}' status",
+        )
+
+    allowed_targets = ALLOWED_TRANSITIONS.get(old_status, set())
+    if new_status not in allowed_targets:
+        allowed_str = ", ".join(sorted(allowed_targets)) if allowed_targets else "None (terminal state)"
+        raise HTTPException(
+            status_code=status.HTTP_400_BAD_REQUEST,
+            detail=f"Invalid status transition from '{old_status}' to '{new_status}'. Allowed transitions: {allowed_str}",
+        )
+
     incident.status = new_status
     incident.updated_at = now
 
-    if new_status == "Resolved":
+    if new_status in ("Resolved", "False Alarm"):
         incident.resolved_at = now
+        # Free the assigned team so they are ready for other emergencies
+        if incident.assigned_team:
+            incident.assigned_team.availability = "Available"
+            incident.assigned_team.current_incident_id = None
+            incident.assigned_team.updated_at = now
     else:
         incident.resolved_at = None
 

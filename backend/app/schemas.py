@@ -53,7 +53,7 @@ class LoginResponse(BaseModel):
 # Incidents
 # ---------------------------------------------------------------------------
 VALID_CATEGORIES = {"FIRE", "ROAD", "MEDICAL", "FLOOD", "COLLAPSE", "OTHER"}
-VALID_STATUSES = {"Reported", "Pending", "In Progress", "Resolved", "False Alarm"}
+VALID_STATUSES = {"Reported", "Assigned", "Pending", "In Progress", "Resolved", "False Alarm"}
 VALID_SEVERITIES = {"Low", "Medium", "High", "Critical"}
 VALID_VERIFICATION = {"Unverified", "Corroborated", "Verified", "False Alarm"}
 
@@ -140,6 +140,19 @@ class IncidentStatusHistoryResponse(BaseModel):
     changed_at: datetime
 
 
+class TeamNested(BaseModel):
+    model_config = ConfigDict(from_attributes=True)
+
+    id: int
+    code: str
+    name: str
+    category: str
+    latitude: float
+    longitude: float
+    location_label: str
+    availability: str
+
+
 class IncidentResponse(BaseModel):
     model_config = ConfigDict(from_attributes=True)
 
@@ -166,6 +179,13 @@ class IncidentResponse(BaseModel):
     severity_overridden: bool
     status: str
     is_duplicate: bool
+
+    # Response Team Assignment
+    assigned_team_id: Optional[int] = None
+    assigned_at: Optional[datetime] = None
+    assignment_distance_km: Optional[float] = None
+    eta_minutes: Optional[int] = None
+    assigned_team: Optional[TeamNested] = None
 
     # Trust Layer
     trust_score: int = 50
@@ -352,3 +372,172 @@ class AIAnalysisResponse(BaseModel):
     extracted_hazards: list[str]
     recommended_dispatch: list[str]
     reasons: list[str]
+
+
+# ---------------------------------------------------------------------------
+# Response Teams
+# ---------------------------------------------------------------------------
+VALID_TEAM_CATEGORIES = {"Fire", "Medical", "Rescue", "Police"}
+VALID_TEAM_AVAILABILITIES = {"Available", "Busy"}
+
+
+class IncidentBrief(BaseModel):
+    model_config = ConfigDict(from_attributes=True)
+
+    id: int
+    ref_code: Optional[str] = None
+    title: str
+
+
+class TeamBase(BaseModel):
+    code: str = Field(..., min_length=2, max_length=20)
+    name: str = Field(..., min_length=2, max_length=80)
+    category: str
+    latitude: float = Field(..., ge=-90.0, le=90.0)
+    longitude: float = Field(..., ge=-180.0, le=180.0)
+    location_label: str = Field(..., min_length=2, max_length=100)
+
+    @field_validator("category")
+    @classmethod
+    def validate_category(cls, v: str) -> str:
+        s = v.strip().title()
+        if s not in VALID_TEAM_CATEGORIES:
+            raise ValueError(f"category must be one of: {', '.join(sorted(VALID_TEAM_CATEGORIES))}")
+        return s
+
+
+class TeamCreate(TeamBase):
+    availability: Optional[str] = "Available"
+
+    @field_validator("availability")
+    @classmethod
+    def validate_avail(cls, v: Optional[str]) -> str:
+        if not v:
+            return "Available"
+        s = v.strip().title()
+        if s not in VALID_TEAM_AVAILABILITIES:
+            raise ValueError(f"availability must be one of: {', '.join(sorted(VALID_TEAM_AVAILABILITIES))}")
+        return s
+
+
+class TeamUpdate(BaseModel):
+    code: Optional[str] = Field(None, min_length=2, max_length=20)
+    name: Optional[str] = Field(None, min_length=2, max_length=80)
+    category: Optional[str] = None
+    latitude: Optional[float] = Field(None, ge=-90.0, le=90.0)
+    longitude: Optional[float] = Field(None, ge=-180.0, le=180.0)
+    location_label: Optional[str] = Field(None, min_length=2, max_length=100)
+    availability: Optional[str] = None
+
+    @field_validator("category")
+    @classmethod
+    def validate_category(cls, v: Optional[str]) -> Optional[str]:
+        if v is None:
+            return None
+        s = v.strip().title()
+        if s not in VALID_TEAM_CATEGORIES:
+            raise ValueError(f"category must be one of: {', '.join(sorted(VALID_TEAM_CATEGORIES))}")
+        return s
+
+    @field_validator("availability")
+    @classmethod
+    def validate_avail(cls, v: Optional[str]) -> Optional[str]:
+        if v is None:
+            return None
+        s = v.strip().title()
+        if s not in VALID_TEAM_AVAILABILITIES:
+            raise ValueError(f"availability must be one of: {', '.join(sorted(VALID_TEAM_AVAILABILITIES))}")
+        return s
+
+
+class TeamAvailabilityUpdate(BaseModel):
+    availability: str
+
+    @field_validator("availability")
+    @classmethod
+    def validate_avail(cls, v: str) -> str:
+        s = v.strip().title()
+        if s not in VALID_TEAM_AVAILABILITIES:
+            raise ValueError(f"availability must be one of: {', '.join(sorted(VALID_TEAM_AVAILABILITIES))}")
+        return s
+
+
+class TeamOut(BaseModel):
+    model_config = ConfigDict(from_attributes=True)
+
+    id: int
+    code: str
+    name: str
+    category: str
+    latitude: float
+    longitude: float
+    location_label: str
+    availability: str
+    current_incident_id: Optional[int] = None
+    current_incident: Optional[IncidentBrief] = None
+    updated_at: datetime
+
+
+class TeamWithDistance(TeamOut):
+    distance_km: float
+    eta_minutes: int
+
+
+class AssignTeamRequest(BaseModel):
+    team_id: Optional[int] = None
+
+
+# ---------------------------------------------------------------------------
+# Priority Scoring
+# ---------------------------------------------------------------------------
+class PriorityBreakdown(BaseModel):
+    severity_score: int
+    severity_component: float
+    people_affected: int
+    people_score: float
+    people_component: float
+    minutes_active: float
+    time_score: float
+    time_component: float
+    category_code: str
+    category_base_weight: int
+    category_score: float
+    category_component: float
+
+
+class PrioritizedIncidentResponse(IncidentResponse):
+    priority_score: float
+    priority_label: str
+    priority_breakdown: PriorityBreakdown
+    rank: int
+
+
+# ---------------------------------------------------------------------------
+# Analytics Summary
+# ---------------------------------------------------------------------------
+class CategoryCount(BaseModel):
+    code: str
+    name: str
+    count: int
+
+
+class StatusCount(BaseModel):
+    status: str
+    count: int
+
+
+class DailyCount(BaseModel):
+    date: str
+    count: int
+
+
+class AnalyticsSummaryResponse(BaseModel):
+    total_incidents: int
+    critical_incidents: int
+    available_teams: int
+    busy_teams: int
+    assigned_incidents: int
+    resolved_incidents: int
+    by_category: list[CategoryCount]
+    by_status: list[StatusCount]
+    incidents_over_time: list[DailyCount]
