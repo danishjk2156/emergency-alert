@@ -55,6 +55,31 @@ class ReporterReputation(Base):
     last_report_at = Column(DateTime(timezone=True), default=utc_now, nullable=False)
 
 
+class ResponseTeam(Base):
+    __tablename__ = "response_teams"
+
+    id = Column(Integer, primary_key=True, index=True)
+    code = Column(String(20), unique=True, index=True, nullable=False)
+    name = Column(String(80), nullable=False)
+    category = Column(String(20), nullable=False)  # Fire | Medical | Rescue | Police
+    latitude = Column(Float, nullable=False)
+    longitude = Column(Float, nullable=False)
+    location_label = Column(String(100), nullable=False)
+    availability = Column(String(20), default="Available", nullable=False)  # Available | Busy
+    current_incident_id = Column(
+        Integer, ForeignKey("incidents.id", ondelete="SET NULL"), nullable=True
+    )
+    updated_at = Column(
+        DateTime(timezone=True), default=utc_now, onupdate=utc_now, nullable=False
+    )
+
+    current_incident = relationship(
+        "Incident",
+        foreign_keys=[current_incident_id],
+        post_update=True,
+    )
+
+
 class Incident(Base):
     __tablename__ = "incidents"
 
@@ -109,11 +134,24 @@ class Incident(Base):
     llm_assessment = Column(Text, nullable=True)
     llm_checked_at = Column(DateTime(timezone=True), nullable=True)
 
+    # Response Team Assignment
+    assigned_team_id = Column(
+        Integer, ForeignKey("response_teams.id", ondelete="SET NULL"), nullable=True
+    )
+    assigned_at = Column(DateTime(timezone=True), nullable=True)
+    assignment_distance_km = Column(Float, nullable=True)
+    eta_minutes = Column(Integer, nullable=True)
+
     created_at = Column(DateTime(timezone=True), default=utc_now, nullable=False, index=True)
     updated_at = Column(DateTime(timezone=True), default=utc_now, onupdate=utc_now, nullable=False)
     resolved_at = Column(DateTime(timezone=True), nullable=True)
 
     category = relationship("Category", back_populates="incidents")
+    assigned_team = relationship(
+        "ResponseTeam",
+        foreign_keys=[assigned_team_id],
+        post_update=True,
+    )
     history = relationship(
         "IncidentStatusHistory",
         back_populates="incident",
