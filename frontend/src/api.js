@@ -1,5 +1,5 @@
 // One request() helper + one function per backend endpoint.
-import { FALLBACK_CATEGORIES, categoryByCode, normSeverity, normStatus, normVerification } from './constants';
+import { FALLBACK_CATEGORIES, categoryByCode, normSeverity, normStatus, normTeamCategory, normVerification } from './constants';
 import { getDeviceId } from './lib/device';
 import { mockRequest } from './mock';
 
@@ -228,6 +228,38 @@ function normTrust(raw) {
   };
 }
 
+/** Backend breakdown → the four weighted components the UI shows (null when the backend sent none). */
+function normBreakdown(b) {
+  if (!b || typeof b !== 'object') return null;
+  const pick = (a, c) => Math.round(Number(b[a] ?? b[c] ?? 0) * 10) / 10;
+  return {
+    severity: pick('severity_component', 'severity'),
+    people: pick('people_component', 'people'),
+    time: pick('time_component', 'time'),
+    category: pick('category_component', 'category'),
+    minutes_active: num(b.minutes_active),
+  };
+}
+
+/** Backend team → UI team. Backend: availability "Available"/"Busy", current_incident(_id), eta_minutes. */
+export function normTeam(t) {
+  if (!t) return t;
+  const avail = String(t.availability ?? t.status ?? 'available').toLowerCase();
+  const incId = t.current_incident_id ?? t.assigned_incident_id ?? null;
+  const inc = t.current_incident ?? t.assigned_incident ?? null;
+  return {
+    ...t,
+    category: normTeamCategory(t.category),
+    status: avail === 'busy' ? 'busy' : 'available',
+    assigned_incident_id: incId,
+    assigned_incident: inc ? { ...inc, ref_code: inc.ref_code ?? `#${inc.id}` } : null,
+    latitude: num(t.latitude),
+    longitude: num(t.longitude),
+    distance_km: num(t.distance_km),
+    eta_mins: num(t.eta_minutes ?? t.eta_mins),
+  };
+}
+
 export function normalizeIncident(raw) {
   if (!raw) return raw;
   const reporter = normReporter(raw);
@@ -240,14 +272,16 @@ export function normalizeIncident(raw) {
     severity_score: Number(raw.severity_score ?? 0),
     severity_reasons: Array.isArray(raw.severity_reasons) ? raw.severity_reasons.map(normReason) : [],
     priority_score: Number(raw.priority_score ?? raw.severity_score ?? 50),
-    priority_label: raw.priority_label ?? normSeverity(raw.severity),
-    priority_breakdown: raw.priority_breakdown ?? {
-      severity: Math.round(Number(raw.severity_score ?? 30) * 0.4),
-      people: Math.min(30, Number(raw.people_affected ?? 0) * 3),
-      time: 15,
-      category: 15,
-    },
-    assigned_team: raw.assigned_team ?? null,
+    priority_label: raw.priority_label ? normSeverity(raw.priority_label) : normSeverity(raw.severity),
+    priority_breakdown: normBreakdown(raw.priority_breakdown),
+    assigned_team: raw.assigned_team
+      ? {
+          ...normTeam(raw.assigned_team),
+          distance_km: num(raw.assignment_distance_km ?? raw.assigned_team.distance_km),
+          eta_mins: num(raw.eta_minutes ?? raw.assigned_team.eta_minutes ?? raw.assigned_team.eta_mins),
+        }
+      : null,
+    assigned_team_id: raw.assigned_team_id ?? raw.assigned_team?.id ?? null,
     people_affected: Number(raw.people_affected ?? 0),
     reporter,
     // A report is anonymous unless the server linked it to an account.
@@ -460,15 +494,28 @@ export async function getPrioritizedIncidents() {
 
 export async function getTeams(params = {}) {
   const data = await request('/teams', { auth: 'required', query: params });
-  return Array.isArray(data) ? data : data.items ?? [];
+  return (Array.isArray(data) ? data : data.items ?? []).map(normTeam);
+}
+
+/** Only send what the backend's TeamCreate/TeamUpdate accept. */
+function teamBody(body) {
+  const out = {};
+  for (const k of ['code', 'name', 'category', 'location_label', 'latitude', 'longitude']) {
+    if (body[k] !== undefined && body[k] !== null && body[k] !== '') out[k] = body[k];
+  }
+  if (out.code) out.code = String(out.code).trim().toUpperCase();
+  if (out.category) out.category = normTeamCategory(out.category);
+  if (out.latitude !== undefined) out.latitude = Number(out.latitude);
+  if (out.longitude !== undefined) out.longitude = Number(out.longitude);
+  return out;
 }
 
 export async function createTeam(body) {
-  return await request('/teams', { method: 'POST', auth: 'required', body });
+  return normTeam(await request('/teams', { method: 'POST', auth: 'required', body: teamBody(body) }));
 }
 
 export async function updateTeam(id, body) {
-  return await request(`/teams/${id}`, { method: 'PUT', auth: 'required', body });
+  return normTeam(await request(`/teams/${id}`, { method: 'PUT', auth: 'required', body: teamBody(body) }));
 }
 
 export async function deleteTeam(id) {
@@ -476,23 +523,41 @@ export async function deleteTeam(id) {
 }
 
 export async function setTeamAvailability(id, available) {
-  return await request(`/teams/${id}/availability`, { method: 'PATCH', auth: 'required', body: { available } });
+  const body = { availability: available ? 'Available' : 'Busy' };
+  return normTeam(await request(`/teams/${id}/availability`, { method: 'PATCH', auth: 'required', body }));
 }
 
+/** Available, suitable teams sorted by distance; the closest is marked recommended. */
 export async function getNearestTeams(incidentId) {
   const data = await request(`/incidents/${incidentId}/nearest-teams`, { auth: 'required' });
-  return Array.isArray(data) ? data : data.items ?? [];
+  const teams = (Array.isArray(data) ? data : data.items ?? []).map(normTeam);
+  teams.sort((a, b) => (a.distance_km ?? Infinity) - (b.distance_km ?? Infinity));
+  return teams.map((t, i) => ({ ...t, recommended: t.recommended ?? i === 0 }));
 }
 
+/** Returns the updated incident (with assigned_team). Omit teamId to auto-assign the nearest. */
 export async function assignTeam(incidentId, teamId) {
   const body = teamId ? { team_id: teamId } : {};
-  return await request(`/incidents/${incidentId}/assign`, { method: 'POST', auth: 'required', body });
+  return normalizeIncident(await request(`/incidents/${incidentId}/assign`, { method: 'POST', auth: 'required', body }));
 }
 
 export async function unassignTeam(incidentId) {
-  return await request(`/incidents/${incidentId}/unassign`, { method: 'POST', auth: 'required' });
+  return normalizeIncident(await request(`/incidents/${incidentId}/unassign`, { method: 'POST', auth: 'required' }));
 }
 
 export async function getAnalyticsSummary() {
-  return await request('/analytics/summary', { auth: 'required' });
+  const a = await request('/analytics/summary', { auth: 'required' });
+  const byStatus = Array.isArray(a.by_status)
+    ? a.by_status
+    : Object.entries(a.by_status || {}).map(([status, count]) => ({ status, count }));
+  const days = a.incidents_over_time ?? a.last_7_days ?? [];
+  return {
+    ...a,
+    by_category: (a.by_category || []).map((c) => ({ ...categoryByCode(c.code), ...c, count: Number(c.count ?? 0) })),
+    by_status: byStatus.map((s) => ({ name: normStatus(s.status ?? s.name), count: Number(s.count ?? 0) })),
+    last_7_days: days.map((d) => {
+      const iso = /^\d{4}-\d{2}-\d{2}$/.test(d.date) ? new Date(`${d.date}T00:00:00`) : null;
+      return { date: iso ? iso.toLocaleDateString('en-US', { month: 'short', day: 'numeric' }) : d.date, count: Number(d.count ?? 0) };
+    }),
+  };
 }

@@ -1,7 +1,7 @@
 import { Fragment, useEffect, useRef, useState } from 'react';
 import { useNavigate } from 'react-router-dom';
 import { getRelated } from '../api';
-import { STATUSES, formatDistance, isFalseAlarm, isSuspicious, timeAgo } from '../constants';
+import { STATUSES, canSetStatus, formatDistance, isFalseAlarm, isSuspicious, timeAgo } from '../constants';
 import ClusterPill from './ClusterPill';
 import Icon, { CategoryIcon } from './Icon';
 import ReporterBadge from './ReporterBadge';
@@ -68,7 +68,8 @@ function RowMenu({ incident, onStatus, onDelete }) {
                   role="menuitem"
                   type="button"
                   className={item}
-                  disabled={s === incident.status}
+                  disabled={s === incident.status || !canSetStatus(incident.status, s)}
+                  title={s === 'Assigned' && s !== incident.status ? 'Assign a team from the incident page' : undefined}
                   onClick={() => {
                     setOpen(false);
                     onStatus(incident, s);

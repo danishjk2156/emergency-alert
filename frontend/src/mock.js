@@ -3,7 +3,7 @@
 // layer: rate limiting, device location, an AI plausibility check, trust score,
 // clusters and duplicates.
 // Only used with `npm run dev:mock` (or VITE_MOCK=true). Data persists in localStorage.
-import { FALLBACK_CATEGORIES, SEVERITIES, STATUSES } from './constants';
+import { FALLBACK_CATEGORIES, SEVERITIES, STATUSES, normTeamCategory } from './constants';
 import { computeSeverity } from './severity';
 
 const KEY = 'resqnet_mock_v7';
@@ -724,7 +724,7 @@ export async function mockRequest(method, path, body, query, token, headers = {}
     db.teams ||= SEED_TEAMS.map((t) => ({ ...t }));
     let res = [...db.teams];
     if (query?.category && query.category !== 'all') {
-      res = res.filter((t) => t.category?.toUpperCase() === query.category.toUpperCase());
+      res = res.filter((t) => normTeamCategory(t.category) === normTeamCategory(query.category));
     }
     if (query?.availability && query.availability !== 'all') {
       const wantAvail = query.availability === 'available';
@@ -769,7 +769,7 @@ export async function mockRequest(method, path, body, query, token, headers = {}
     if (!team) return fail(404, 'Team not found');
 
     if (method === 'PATCH' && r[2] === '/availability') {
-      const isAvail = body?.available !== undefined ? Boolean(body.available) : body?.status === 'available';
+      const isAvail = body?.availability !== undefined ? String(body.availability).toLowerCase() === 'available' : body?.available !== undefined ? Boolean(body.available) : body?.status === 'available';
       if (!isAvail && team.status === 'available') {
         team.status = 'busy';
       } else if (isAvail) {

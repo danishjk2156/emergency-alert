@@ -1,7 +1,31 @@
 // Design tokens + shared lookups. Severity = filled pill, status = outlined chip.
 
 export const SEVERITIES = ['Low', 'Medium', 'High', 'Critical'];
-export const STATUSES = ['Reported', 'Pending', 'In Progress', 'Resolved'];
+export const STATUSES = ['Reported', 'Assigned', 'In Progress', 'Resolved'];
+
+/** Backend lifecycle: Reported → Assigned → In Progress → Resolved; False Alarm from any open state. */
+export const ALLOWED_TRANSITIONS = {
+  Reported: ['Assigned', 'False Alarm'],
+  Assigned: ['In Progress', 'False Alarm'],
+  'In Progress': ['Resolved', 'False Alarm'],
+  Resolved: [],
+  'False Alarm': [],
+  Pending: ['Reported', 'Assigned', 'In Progress', 'Resolved', 'False Alarm'],
+};
+
+/** Statuses an admin can pick by hand. "Assigned" needs a team, so it goes through the dispatch panel. */
+export const canSetStatus = (from, to) => to !== 'Assigned' && (ALLOWED_TRANSITIONS[from] || []).includes(to);
+
+/** Response team categories the backend accepts. */
+export const TEAM_CATEGORIES = [
+  { code: 'Fire', name: 'Fire Response', icon: '🔥', prefix: 'FIRE' },
+  { code: 'Medical', name: 'Emergency Medical (EMS)', icon: '🚑', prefix: 'MED' },
+  { code: 'Rescue', name: 'Search, Flood & Rescue', icon: '🛟', prefix: 'RESCUE' },
+  { code: 'Police', name: 'Police & Traffic Patrol', icon: '🚓', prefix: 'POLICE' },
+];
+const TEAM_CAT_MAP = { fire: 'Fire', medical: 'Medical', rescue: 'Rescue', flood: 'Rescue', collapse: 'Rescue', other: 'Rescue', police: 'Police', road: 'Police' };
+export const normTeamCategory = (c) => TEAM_CAT_MAP[String(c || '').toLowerCase()] || 'Rescue';
+export const teamCategory = (c) => TEAM_CATEGORIES.find((t) => t.code === normTeamCategory(c));
 
 export const SEVERITY_STYLES = {
   Low: 'bg-green-700 text-white',
@@ -20,6 +44,7 @@ export const SEVERITY_BAR = {
 
 export const STATUS_STYLES = {
   Reported: 'border-gray-600 text-gray-800',
+  Assigned: 'border-indigo-600 text-indigo-800',
   Pending: 'border-amber-600 text-amber-800',
   'In Progress': 'border-blue-700 text-blue-800',
   Resolved: 'border-green-700 text-green-800',
@@ -28,6 +53,7 @@ export const STATUS_STYLES = {
 
 export const STATUS_BAR = {
   Reported: 'bg-gray-500',
+  Assigned: 'bg-indigo-600',
   Pending: 'bg-amber-500',
   'In Progress': 'bg-blue-700',
   Resolved: 'bg-green-700',
@@ -89,6 +115,8 @@ const SEV_MAP = { low: 'Low', medium: 'Medium', high: 'High', critical: 'Critica
 const STATUS_MAP = {
   reported: 'Reported',
   open: 'Reported',
+  assigned: 'Assigned',
+  dispatched: 'Assigned',
   pending: 'Pending',
   'in progress': 'In Progress',
   in_progress: 'In Progress',

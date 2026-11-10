@@ -19,7 +19,7 @@ import Spinner from '../components/Spinner';
 import StatusChip from '../components/StatusChip';
 import Timeline from '../components/Timeline';
 import { useToast } from '../components/Toast';
-import { SEVERITIES, STATUSES, STATUS_STYLES, formatDateTime } from '../constants';
+import { SEVERITIES, STATUSES, STATUS_STYLES, canSetStatus, formatDateTime } from '../constants';
 
 const HEADER_TONE = {
   Critical: 'border-t-[6px] border-t-brand bg-brand-soft/50',
@@ -418,14 +418,18 @@ export default function IncidentDetailPage() {
             <div role="radiogroup" aria-label="New status" className="grid grid-cols-2 gap-2">
               {STATUSES.map((s) => {
                 const selected = nextStatus === s;
+                const isCurrent = s === incident.status;
+                const allowed = isCurrent || canSetStatus(incident.status, s);
                 return (
                   <button
                     key={s}
                     type="button"
                     role="radio"
                     aria-checked={selected}
+                    disabled={!allowed}
+                    title={!allowed ? (s === 'Assigned' ? 'Assign a team in the dispatch panel below' : `Not allowed from ${incident.status}`) : undefined}
                     onClick={() => setNextStatus(s)}
-                    className={`min-h-[48px] rounded-md border-2 px-2 text-sm font-bold transition-all duration-200 ${
+                    className={`min-h-[48px] rounded-md border-2 px-2 text-sm font-bold transition-all duration-200 disabled:cursor-not-allowed disabled:opacity-40 ${
                       selected ? `${STATUS_STYLES[s]} scale-[1.02] bg-white shadow-card ring-2 ring-current ring-offset-1` : 'border-field/40 text-ink-2 hover:border-ink'
                     }`}
                   >
@@ -450,7 +454,11 @@ export default function IncidentDetailPage() {
             <button type="button" onClick={saveStatus} disabled={!statusChanged || savingStatus} className="btn btn-primary mt-3 w-full">
               {savingStatus ? <Spinner /> : <Icon name="check" className="h-4 w-4" />} Save status
             </button>
-            {!statusChanged && <p className="mt-2 text-center text-xs text-ink-3">Pick a different status to save.</p>}
+            {!statusChanged && (
+              <p className="mt-2 text-center text-xs text-ink-3">
+                {incident.status === 'Reported' ? 'Assign a response team below to move this incident forward.' : 'Pick the next status to save.'}
+              </p>
+            )}
           </Panel>
 
           <AssignmentPanel incident={incident} onIncidentUpdated={load} />

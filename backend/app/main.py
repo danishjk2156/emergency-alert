@@ -5,15 +5,36 @@ from fastapi.exceptions import RequestValidationError
 from fastapi.middleware.cors import CORSMiddleware
 from fastapi.responses import JSONResponse
 
+from sqlalchemy import inspect, text
+
 from .database import Base, SessionLocal, engine
 from .routers import analytics, auth, categories, dashboard, incidents, teams
 from .seed import seed_database
 
 
+def add_missing_columns() -> None:
+    """create_all() never alters existing tables, so a database made by an older
+    version would lack newer columns (e.g. incidents.assigned_team_id) and crash.
+    Add any missing nullable columns in place; data is kept."""
+    insp = inspect(engine)
+    existing_tables = set(insp.get_table_names())
+    with engine.begin() as conn:
+        for table in Base.metadata.tables.values():
+            if table.name not in existing_tables:
+                continue
+            have = {c["name"] for c in insp.get_columns(table.name)}
+            for col in table.columns:
+                if col.name in have:
+                    continue
+                col_type = col.type.compile(dialect=engine.dialect)
+                conn.execute(text(f'ALTER TABLE "{table.name}" ADD COLUMN "{col.name}" {col_type}'))
+
+
 @asynccontextmanager
 async def lifespan(app: FastAPI):
-    # 1. Create tables if not existing
+    # 1. Create tables if not existing, then bring older tables up to date
     Base.metadata.create_all(bind=engine)
+    add_missing_columns()
     # 2. Seed initial categories, admin user, and 12 realistic incidents
     db = SessionLocal()
     try:

@@ -7,6 +7,7 @@ import ConfirmDialog from '../components/ConfirmDialog';
 import Icon from '../components/Icon';
 import Spinner from '../components/Spinner';
 import { useToast } from '../components/Toast';
+import { TEAM_CATEGORIES, teamCategory } from '../constants';
 
 // Fix Leaflet marker icons with clean divIcon
 const pinIcon = L.divIcon({
@@ -25,14 +26,18 @@ function MapClickPicker({ position, onPick }) {
   return position ? <Marker position={position} icon={pinIcon} /> : null;
 }
 
-const CATEGORIES = [
-  { code: 'FIRE', name: 'Fire Response', icon: '🔥' },
-  { code: 'MEDICAL', name: 'Emergency Medical (EMS)', icon: '🚑' },
-  { code: 'FLOOD', name: 'Flood & Water Rescue', icon: '🌊' },
-  { code: 'COLLAPSE', name: 'Structural Search & Rescue', icon: '🏚️' },
-  { code: 'ROAD', name: 'Traffic & Highway Patrol', icon: '🚓' },
-  { code: 'OTHER', name: 'Hazmat / General Rescue', icon: '⚠️' },
-];
+const CATEGORIES = TEAM_CATEGORIES;
+
+/** Next free code like FIRE-04 for a category. */
+function suggestCode(teams, category) {
+  const prefix = teamCategory(category)?.prefix || 'TEAM';
+  const used = new Set(teams.map((t) => String(t.code || '').toUpperCase()));
+  for (let n = 1; n < 1000; n++) {
+    const code = `${prefix}-${String(n).padStart(2, '0')}`;
+    if (!used.has(code)) return code;
+  }
+  return `${prefix}-${Date.now() % 1000}`;
+}
 
 export default function TeamsPage() {
   const toast = useToast();
@@ -47,7 +52,7 @@ export default function TeamsPage() {
   const [formValues, setFormValues] = useState({
     code: '',
     name: '',
-    category: 'FIRE',
+    category: 'Fire',
     location_label: '',
     latitude: 13.0418,
     longitude: 80.2341,
@@ -87,7 +92,7 @@ export default function TeamsPage() {
     setFormValues({
       code: '',
       name: '',
-      category: 'FIRE',
+      category: 'Fire',
       location_label: '',
       latitude: 13.0418,
       longitude: 80.2341,
@@ -113,7 +118,9 @@ export default function TeamsPage() {
   const handleFormSubmit = async (e) => {
     e.preventDefault();
     const errors = {};
-    if (!formValues.name.trim()) errors.name = 'Team name is required.';
+    if (formValues.name.trim().length < 2) errors.name = 'Team name must be at least 2 characters.';
+    if (formValues.code.trim() && !/^[A-Za-z0-9-]{2,20}$/.test(formValues.code.trim())) errors.code = 'Code: 2–20 letters, digits or dashes.';
+    if (formValues.location_label.trim() && formValues.location_label.trim().length < 2) errors.location_label = 'Location label must be at least 2 characters.';
     if (!formValues.category) errors.category = 'Category is required.';
     if (!formValues.location_label.trim()) errors.location_label = 'Location label is required.';
     if (isNaN(Number(formValues.latitude))) errors.latitude = 'Valid latitude is required.';
@@ -126,11 +133,12 @@ export default function TeamsPage() {
 
     setSaving(true);
     try {
+      const payload = { ...formValues, code: formValues.code.trim() || suggestCode(teams, formValues.category) };
       if (editingTeam) {
-        await updateTeam(editingTeam.id, formValues);
+        await updateTeam(editingTeam.id, payload);
         toast(`Team ${editingTeam.code} updated.`, 'success');
       } else {
-        const created = await createTeam(formValues);
+        const created = await createTeam(payload);
         toast(`New team ${created.code || created.name} added.`, 'success');
       }
       setModalOpen(false);
@@ -284,7 +292,7 @@ export default function TeamsPage() {
                 {teams.map((team) => {
                   const isBusy = team.status === 'busy' || Boolean(team.assigned_incident_id);
                   const isToggling = togglingId === team.id;
-                  const catObj = CATEGORIES.find((c) => c.code === team.category) || { icon: '⚠️', name: team.category };
+                  const catObj = teamCategory(team.category) || { icon: '⚠️', name: team.category };
 
                   return (
                     <tr key={team.id} className="hover:bg-paper/30 transition-colors">
@@ -418,6 +426,22 @@ export default function TeamsPage() {
                 {formErrors.name && <p className="mt-1 text-xs text-danger">{formErrors.name}</p>}
               </div>
 
+              {/* Code */}
+              <div>
+                <label className="block text-xs font-bold uppercase text-ink">
+                  Team Code <span className="text-[10px] text-ink-muted normal-case">(leave empty to auto-generate)</span>
+                </label>
+                <input
+                  type="text"
+                  value={formValues.code}
+                  maxLength={20}
+                  onChange={(e) => setFormValues((v) => ({ ...v, code: e.target.value.toUpperCase() }))}
+                  placeholder={suggestCode(teams.filter((t) => t.id !== editingTeam?.id), formValues.category)}
+                  className="mt-1 w-full rounded-lg border border-border px-3 py-2 font-mono text-xs font-medium text-ink focus:border-brand focus:outline-none"
+                />
+                {formErrors.code && <p className="mt-1 text-xs text-danger">{formErrors.code}</p>}
+              </div>
+
               {/* Category */}
               <div>
                 <label className="block text-xs font-bold uppercase text-ink">Response Category</label>
@@ -538,3 +562,4 @@ export default function TeamsPage() {
     </div>
   );
 }
+

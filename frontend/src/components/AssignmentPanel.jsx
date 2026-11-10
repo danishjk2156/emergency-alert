@@ -10,6 +10,7 @@ export default function AssignmentPanel({ incident, onIncidentUpdated }) {
   const toast = useToast();
   const [nearestTeams, setNearestTeams] = useState([]);
   const [loadingNearest, setLoadingNearest] = useState(false);
+  const [nearestError, setNearestError] = useState(null);
   const [assigningId, setAssigningId] = useState(null);
   const [updatingLifecycle, setUpdatingLifecycle] = useState(false);
 
@@ -22,8 +23,10 @@ export default function AssignmentPanel({ incident, onIncidentUpdated }) {
     try {
       const data = await getNearestTeams(incident.id);
       setNearestTeams(data);
+      setNearestError(null);
     } catch (err) {
-      console.error(err);
+      setNearestTeams([]);
+      setNearestError(err.message || 'Could not load nearby teams.');
     } finally {
       setLoadingNearest(false);
     }
@@ -136,8 +139,11 @@ export default function AssignmentPanel({ incident, onIncidentUpdated }) {
                   </span>
                   <span className="flex items-center gap-1 font-mono text-[11px]">
                     <Icon name="clock" className="h-3.5 w-3.5 text-blue-600" />
-                    ETA: ~{incident.assigned_team?.eta_mins ?? 8} min
+                    ETA: {incident.assigned_team?.eta_mins != null ? `~${incident.assigned_team.eta_mins} min` : '—'}
                   </span>
+                  {incident.assigned_team?.distance_km != null && (
+                    <span className="font-mono text-[11px]">{incident.assigned_team.distance_km} km away</span>
+                  )}
                 </div>
               </div>
 
@@ -258,7 +264,7 @@ export default function AssignmentPanel({ incident, onIncidentUpdated }) {
             </div>
           ) : !nearestTeams.length ? (
             <div className="rounded-lg border border-dashed border-border p-5 text-center text-xs text-ink-muted">
-              No response teams currently available. All units are busy on active incidents.
+              {nearestError || 'No suitable response teams are available right now. All matching units are busy.'}
             </div>
           ) : (
             <div className="divide-y divide-border rounded-xl border border-border bg-paper/30 overflow-hidden">
@@ -312,3 +318,4 @@ export default function AssignmentPanel({ incident, onIncidentUpdated }) {
     </div>
   );
 }
+

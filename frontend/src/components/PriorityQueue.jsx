@@ -297,3 +297,4 @@ export default function PriorityQueue({ onSelectIncident }) {
     </div>
   );
 }
+
