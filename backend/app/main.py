@@ -6,7 +6,7 @@ from fastapi.middleware.cors import CORSMiddleware
 from fastapi.responses import JSONResponse
 
 from .database import Base, SessionLocal, engine
-from .routers import auth, categories, dashboard, incidents
+from .routers import analytics, auth, categories, dashboard, incidents, teams
 from .seed import seed_database
 
 
@@ -70,6 +70,8 @@ app.include_router(categories.router, prefix="/api")
 app.include_router(auth.router, prefix="/api")
 app.include_router(incidents.router, prefix="/api")
 app.include_router(dashboard.router, prefix="/api")
+app.include_router(teams.router, prefix="/api")
+app.include_router(analytics.router, prefix="/api")
 
 
 @app.get("/", tags=["Health"])
